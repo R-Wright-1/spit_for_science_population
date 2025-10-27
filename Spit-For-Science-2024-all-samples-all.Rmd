@@ -1,0 +1,3332 @@
+---
+title: "Spit for Science Sick Kids 2024 all samples"
+output: html_notebook
+---
+
+```{R, results='hide', fig.keep='all', message=FALSE}
+library(reticulate)
+use_python('/Users/robynwright/anaconda3/envs/r-environment/bin/python')
+```
+
+```{R, results='hide', fig.keep='all', message=FALSE}
+BiocManager::install("biobakery/maaslin3")
+# library(maaslin3)
+# library(ape)
+# library(philr)
+# library(phyloseq)
+# library(vegan)
+# library(tidyr)
+# library(stats)
+# library(broom)
+# library(ALDEx2)
+# library(ANCOMBC)
+# library(Maaslin2)
+```
+
+```{python}
+# import numpy as np
+# np.__version__
+from datetime import datetime
+import pandas as pd
+import math
+import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse, Patch, Rectangle
+import matplotlib.transforms as transforms
+import matplotlib as mpl
+import matplotlib.cm as cm
+from matplotlib.lines import Line2D
+from matplotlib.offsetbox import AnchoredText
+from mpl_toolkits.axes_grid1.inset_locator import inset_axes
+# from skbio.diversity import get_alpha_diversity_metrics, get_beta_diversity_metrics, alpha_diversity, beta_diversity
+# from skbio import read
+# from skbio.tree import TreeNode
+import numpy as np
+import os
+import random
+import kmedoids
+from scipy.stats import mannwhitneyu, ttest_ind, pearsonr, spearmanr, randint
+# from deicode.preprocessing import rclr
+#from skbio.stats.composition import clr
+from scipy.spatial import distance
+# from skbio.stats import ordination
+from sklearn import preprocessing
+#from sklearn.metrics import plot_roc_curve, roc_curve, accuracy_score, roc_auc_score, confusion_matrix
+from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
+import statsmodels.api as sm
+from statsmodels.formula.api import ols
+lowess = sm.nonparametric.lowess
+from Bio import Phylo
+import random
+import pickle
+# from ete3 import Tree
+
+folder_all = '/Users/robynwright/Dropbox/Langille_Lab_postdoc/SfS_SickKids/'
+folder = '/Users/robynwright/Dropbox/Langille_Lab_postdoc/SfS_SickKids/analysis_all_samples/'
+exports = folder+'QIIME2/deblur_output_exported/'
+colors_gender = {1:'#F4D03F', 2:'#C0392B', 'Male':'#F4D03F', 'Female':'#C0392B'}
+colors_ethnicity = {'South Asian':'#16A085', 'East Asian':'#8E44AD', 'White':'#2980B9', 1:'#8E44AD', 2:'#16A085', 3:'#2980B9'}
+colors_diag = {'none':'#A569BD', 'diagnosis':'#45B39D', 'controls':'#A569BD', 'cases':'#45B39D', 0:'#A569BD', 1:'#45B39D'}
+colors_age = {'group1':'#A60DD3', 'group2':'#D840BC', 'group_3':'#E67E22', 'group_4':'#F4D03F', 'Young':'#A60DD3', 'Middle':'#D840BC', 'Old':'#E67E22'}
+colors_condition = {'no_reported_condition':'#5dade2', 'physical_condition':'#48c9b0', 'mental_condition':'#f4d03f', 'mental_and_physical':'#dc7633'}
+colors_antibiotics = {'never':'#2e4053', 'in_the_last_month':'#f4d03f'}
+colors_distance = {'Control_Control':'k', 'Case_Case':'k', 'Case_Control':'#7D3C98'}
+colors_gender_ethnicity = {'South Asian-Male':'#e67e22', 'South Asian-Female':'#f1c40f', 'East Asian-Male':'#229954', 'East Asian-Female':'#1f618d', 'White-Male':'#6c3483', 'White-Female':'#a93226'}
+```
+
+Confidence ellipse:
+```{python}
+def confidence_ellipse(x, y, ax, n_std=2.0, facecolor='none', **kwargs):
+    x = np.array(x)
+    y = np.array(y)
+    if x.size != y.size:
+        raise ValueError("x and y must be the same size")
+    cov = np.cov(x, y)
+    pearson = cov[0, 1]/np.sqrt(cov[0, 0] * cov[1, 1])
+    # Using a special case to obtain the eigenvalues of this
+    # two-dimensionl dataset.
+    ell_radius_x = np.sqrt(1 + pearson)
+    ell_radius_y = np.sqrt(1 - pearson)
+    ellipse = Ellipse((0, 0), width=ell_radius_x * 2, height=ell_radius_y * 2,
+                      facecolor=facecolor, **kwargs)
+    # Calculating the stdandard deviation of x from
+    # the squareroot of the variance and multiplying
+    # with the given number of standard deviations.
+    scale_x = np.sqrt(cov[0, 0]) * n_std
+    mean_x = np.mean(x)
+    # calculating the stdandard deviation of y ...
+    scale_y = np.sqrt(cov[1, 1]) * n_std
+    mean_y = np.mean(y)
+    transf = transforms.Affine2D() \
+        .rotate_deg(45) \
+        .scale(scale_x, scale_y) \
+        .translate(mean_x, mean_y)
+    ellipse.set_transform(transf + ax.transData)
+    return ax.add_patch(ellipse)
+```
+
+Draw tree:
+```{python}
+def draw_tree(tree, orient_tree='horizontal', vert_orient='down', axes=None, label_func=str, span=355, plot_labels=True, end_same=True, fs=10):
+    # Arrays that store lines for the plot of clades
+    horizontal_linecollections = []
+    vertical_linecollections = []
+    def get_x_positions(tree):
+        """Create a mapping of each clade to its horizontal position.
+        Dict of {clade: x-coord}
+        """
+        depths = tree.depths()
+        # If there are no branch lengths, assume unit branch lengths
+        if not max(depths.values()):
+            depths = tree.depths(unit_branch_lengths=True)
+        return depths
+    def format_branch_label(clade):
+                return None
+    def get_y_positions(tree):
+        """Create a mapping of each clade to its vertical position.
+        Dict of {clade: y-coord}.
+        Coordinates are negative, and integers for tips.
+        """
+        maxheight = tree.count_terminals()
+        # Rows are defined by the tips
+        heights = {tip: maxheight - i for i, tip in enumerate(reversed(tree.get_terminals()))}
+        # Internal nodes: place at midpoint of children
+        def calc_row(clade):
+            for subclade in clade:
+                if subclade not in heights:
+                    calc_row(subclade)
+            # Closure over heights
+            heights[clade] = (
+                heights[clade.clades[0]] + heights[clade.clades[-1]]
+            ) / 2.0
+        if tree.root.clades:
+            calc_row(tree.root)
+        return heights
+    x_posns = get_x_positions(tree)
+    y_posns = get_y_positions(tree)
+    if axes is None:
+        fig = plt.figure()
+        if orient_tree == 'circular':
+            axes = fig.add_subplot(1, 1, 1, orientation='polar')
+        else:
+            axes = fig.add_subplot(1, 1, 1)
+    elif not isinstance(axes, plt.matplotlib.axes.Axes):
+        raise ValueError("Invalid argument for axes: %s" % axes)
+    leaves = [['Label', 'x loc', 'y loc', 'rotation', 'va', 'ha']]
+    def draw_clade_lines(orientation="horizontal",y_here=0,x_start=0,x_here=0,y_bot=0,y_top=0,color="black",lw=".1", ls='-'):
+        """Create a line.
+        Graphical formatting of the lines representing clades in the plot can be
+        customized by altering this function.
+        """
+        if orientation == "horizontal":
+            axes.hlines(y_here, x_start, x_here, color=color, lw=lw, linestyle=ls)
+        elif orientation == "vertical":
+            axes.vlines(x_here, y_bot, y_top, color=color, linestyle=ls)
+    def draw_clade(clade, x_start, color, lw, orient_tree='horizontal', vert_orient='up'):
+        """Recursively draw a tree, down from the given clade."""
+        x_here = x_posns[clade]
+        y_here = y_posns[clade]
+        xmax = max(x_posns.values())+max(x_posns.values())/30
+        # phyloXML-only graphics annotations
+        if hasattr(clade, "color") and clade.color is not None:
+            color = clade.color.to_hex()
+        if hasattr(clade, "width") and clade.width is not None:
+            lw = clade.width * plt.rcParams["lines.linewidth"]
+        if orient_tree == 'horizontal':
+            # Draw a horizontal line from start to here
+            draw_clade_lines(orientation='horizontal',y_here=y_here,x_start=x_start,x_here=x_here,color=color,lw=lw)
+            if clade.name != None and end_same and '__' not in clade.name:
+                draw_clade_lines(orientation='horizontal',y_here=y_here,x_start=xmax,x_here=x_here,color=color,lw=lw-1, ls='-.')
+            # Add node/taxon labels
+            if clade.name not in (None, clade.__class__.__name__):
+                label = label_func(clade.name)
+                if end_same: xplc = xmax
+                else: xplc = x_here
+                if plot_labels: axes.text(xplc, y_here, " %s" % label, verticalalignment="center", horizontalalignment='left', color='k', fontsize=fs)
+                leaves.append([label, xplc, y_here, 0, 'center', 'left']) 
+            if clade.clades:
+                # Draw a vertical line connecting all children
+                y_top = y_posns[clade.clades[0]]
+                y_bot = y_posns[clade.clades[-1]]
+                # Only apply widths to horizontal lines, like Archaeopteryx
+                draw_clade_lines(orientation='vertical',x_here=x_here,y_bot=y_bot,y_top=y_top,color=color,lw=lw)
+                # Draw descendents
+                for child in clade:
+                    draw_clade(child, x_here, color, lw)
+        elif orient_tree == 'vertical':
+                draw_clade_lines(orientation='vertical', x_here=y_here, y_bot=x_start, y_top=x_here,color=color,lw=lw)
+                if clade.name != None and end_same and '__' not in clade.name:
+                    draw_clade_lines(orientation='vertical',x_here=y_here, y_bot=xmax, y_top=x_here,color=color,lw=lw-1, ls='-.')
+                if clade.name not in (None, clade.__class__.__name__):
+                    label = label_func(clade.name)
+                    if end_same: xplc = xmax
+                    else: xplc = x_here
+                    if vert_orient == 'up':
+                        if plot_labels: axes.text(y_here, xplc,  " %s" % label, verticalalignment='bottom', horizontalalignment='center', color='k', rotation=90, fontsize=fs)
+                        leaves.append([label, y_here, xplc, 90, 'bottom', 'center']) 
+                    elif vert_orient == 'down':
+                        if plot_labels: axes.text(y_here, xplc,  " %s" % label, verticalalignment='top', horizontalalignment='center', color='k', rotation=90, fontsize=fs)
+                        leaves.append([label, y_here, xplc, 90, 'top', 'center']) 
+                if clade.clades:
+                    y_top = y_posns[clade.clades[0]]
+                    y_bot = y_posns[clade.clades[-1]]
+                    draw_clade_lines(orientation='horizontal', y_here=x_here, x_start=y_bot, x_here=y_top, color=color,lw=lw)
+                    for child in clade:
+                        draw_clade(child, x_here, color, lw, orient_tree='vertical', vert_orient=vert_orient)
+    def draw_clade_polar(clade, color, lw, x_start=0.1, y_start=0, span=360):
+        ymax = max(y_posns.values())
+        yang = span/ymax
+        xmax = max(x_posns.values())+max(x_posns.values())/30
+        x_here = x_posns[clade]
+        y_here = y_posns[clade]
+        rad = span*np.pi/180
+        rad = rad/ymax
+        if y_start == 0:
+            y_start = rad*y_start
+        y_here = rad*y_here
+        if x_here != 0: 
+            axes.plot([y_start, y_here], [x_start, x_here], color=color, lw=lw)
+            if clade.name != None and end_same and '__' not in clade.name:
+                axes.plot([y_start, y_here], [x_here, xmax], color=color, lw=lw-1, linestyle='-.')
+        if clade.name not in (None, clade.__class__.__name__):
+            label = label_func(clade.name)
+            rot = y_here*(180/np.pi)
+            if end_same: xplc = xmax
+            else: xplc = x_here
+            if rot <= 90: va, ha = 'center', 'left'
+            elif rot <= 180: va, ha, rot = 'center', 'right', rot-180
+            elif rot <= 270: va, ha, rot = 'center', 'right', rot-180
+            else: va, ha = 'center', 'left'
+            if plot_labels: axes.text(y_here, xplc, label, color='k', rotation=rot, rotation_mode='anchor', va=va, ha=ha, fontsize=fs)
+            leaves.append([label, y_here, xplc, rot, va, ha])
+        if clade.clades:
+            y_top = y_posns[clade.clades[0]]
+            y_bot = y_posns[clade.clades[-1]]
+            y_top = y_top*yang*np.pi/180
+            y_bot = y_bot*yang*np.pi/180
+            curve = [[y_bot, y_top], [x_here, x_here]]
+            x = np.linspace(curve[0][0], curve[0][1], 500)
+            y = interp1d(curve[0], curve[1])(x)
+            axes.plot(x, y, color=color, lw=lw)
+            ymin, ymax = min(x), max(x)
+            ydiff = ymax-ymin
+            count = [1 for child in clade]
+            count = sum(count)-2
+            locs = [ymin]
+            for a in range(count):
+                locs.append(ydiff/(count+1)+ymin)
+            locs.append(ymax)
+            count = 0
+            for child in clade:
+                if child.name != None: 
+                    y_start = y_posns[child]*rad
+                else:
+                    y_start = locs[count]
+                draw_clade_polar(child, color, lw, x_start=x_here, y_start=y_start, span=span)
+                count += 1
+    plt.sca(axes)
+    if orient_tree in ['horizontal', 'vertical']:
+        draw_clade(tree.root, 0, "k", plt.rcParams["lines.linewidth"], orient_tree=orient_tree, vert_orient=vert_orient)
+        if orient_tree == 'horizontal':
+            xmax = max(x_posns.values())
+            axes.set_xlim(-0.05 * xmax, 1.25 * xmax)
+            # Also invert the y-axis (origin at the top)
+            # Add a small vertical margin, but avoid including 0 and N+1 on the y axis
+            axes.set_ylim(max(y_posns.values()) + 0.8, 0.2)
+        elif orient_tree == 'vertical':
+            axes.set_xlim(max(y_posns.values()) + 0.8, 0.2)
+            xmax = max(x_posns.values())
+            if vert_orient == 'up':
+                axes.set_ylim(-0.05 * xmax, 1.25 * xmax)
+            elif vert_orient == 'down':
+                axes.set_ylim(1.25 * xmax, -0.05 * xmax)
+        axes.set_xticks([]), axes.set_yticks([])
+    elif orient_tree == 'circular':
+        print('Note that if you provided an axes for this then it must be polar orientation or it will probably look very strange')
+        x_start = 0
+        y_start = 0
+        draw_clade_polar(tree.root, "k", plt.rcParams["lines.linewidth"], x_start=x_start, y_start=y_start, span=span)
+        axes.set_ylim([0, max(x_posns.values())])
+        axes.yaxis.grid(False)
+        axes.set_xticks([])
+        axes.set_yticklabels([])
+    return leaves
+```
+
+## Choose best sample for each participant
+
+```{python}
+ft = pd.read_csv(exports+'feature-table_w_tax.txt', index_col=0, header=1, sep='\t').drop('taxonomy', axis=1)
+samples = list(ft.columns)
+sample_redo = [s for s in samples if '-redo' in s]
+
+ft_sums = ft.sum(axis=0)
+drop = []
+for s in sample_redo:
+  redo_sum = ft_sums[s]
+  if s.split('-')[0] in samples:
+    original_sum = ft_sums[s.split('-')[0]]
+    if redo_sum > original_sum:
+      drop.append(s.split('-')[0])
+    else:
+      drop.append(s)
+  else:
+    continue
+
+ft_reduced = ft.copy(deep=True).drop(drop, axis=1)
+samples_reduced = list(ft_reduced.columns)
+reduced_redo = [s for s in samples_reduced if '-redo' in s]
+rename = {}
+for s in reduced_redo:
+  rename[s] = s.split('-')[0]
+ft_reduced = ft_reduced.rename(columns=rename)
+
+ft = ft.drop(['TAG203638', 'TAG205928dup'], axis=1)
+
+ft_reduced.to_csv(exports+'feature-table_duplicates_dropped.csv')
+ft_reduced.to_csv(folder+'files/feature-table_duplicates_dropped.csv')
+
+finished = True
+```
+
+## Examine prevalence cut-off
+
+```{python}
+ft = pd.read_csv(folder+'files/feature-table_duplicates_dropped.csv', index_col=0, header=0)
+
+ft = ft.transpose()
+ft = ft[ft.sum(axis=1) >= 1000]
+ft = ft.transpose()
+
+ft_ra = ft.copy(deep=True)
+ft_ra = ft_ra.divide(ft_ra.sum(axis=0), axis=1).multiply(100)
+
+ft_prev = ft.copy(deep=True)
+ft_prev[ft_prev > 1] = 1
+ft_prev['Sum'] = ft_prev.sum(axis=1)
+
+fig = plt.figure(figsize=(15,15))
+ax1 = plt.subplot(311)
+ax2 = plt.subplot(312, sharex=ax1)
+ax3 = plt.subplot(313, sharex=ax1)
+
+cutoffs = [1, 0.99, 0.98, 0.97, 0.96, 0.95, 0.9, 0.85, 0.8, 0.75, 0.7, 0.65, 0.6, 0.55, 0.5, 0.45, 0.4, 0.35, 0.3, 0.25, 0.2, 0.15, 0.1, 0.05, 0.04, 0.03, 0.02, 0.01, 0]
+seqs = [1000, 2000, 3000, 4000, 5000]
+colors_seqs = ['#FBEC03', '#FBB803', '#FB7803', '#FB1203', '#950A01']
+cutoffs.reverse()
+samples_remaining_df = []
+for c in range(len(cutoffs)):
+  prev = round(ft.shape[1]*cutoffs[c])
+  ft_prev_coff = ft_prev.copy(deep=True)
+  ft_prev_coff = ft_prev_coff.loc[ft_prev_coff['Sum'] >= prev]
+  relabun_range = ft_ra.loc[ft_prev_coff.index, :].sum(axis=0).values
+  num_asv_range = ft_prev_coff.drop('Sum', axis=1).sum(axis=0).values
+  x = cutoffs[c]*100
+  sc = ax1.scatter(np.random.normal(x, scale=0.1, size=len(relabun_range)), relabun_range, marker='o', color='#2471A3', alpha=0.1, s=2)
+  box = ax1.boxplot(relabun_range, positions=[x], widths=0.8, showfliers=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  sc = ax2.scatter(np.random.normal(x, scale=0.1, size=len(num_asv_range)), num_asv_range, marker='o', color='#2471A3', alpha=0.1, s=2)
+  box = ax2.boxplot(num_asv_range, positions=[x], widths=0.8, showfliers=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  for s in range(len(seqs)):
+    ft_red = ft.copy(deep=True)
+    ft_red = ft_red.loc[ft_prev_coff.index, :].transpose()
+    ft_red = ft_red[ft_red.sum(axis=1) >= seqs[s]]
+    ft_red = ft_red.transpose()
+    samples_remaining = ft_red.shape[1]/ft.shape[1]
+    samples_remaining_df.append([cutoffs[c], seqs[s], ft_red.shape[1], samples_remaining])
+    sc = ax3.scatter(x, samples_remaining, marker='o', color=colors_seqs[s], s=30, alpha=0.8)
+
+handles = [Line2D([0], [0], marker='s', color='w', label='>'+str(seqs[s])+' sequences', markerfacecolor=colors_seqs[s], markersize=12) for s in range(len(seqs))]
+legend = ax3.legend(handles=handles, loc='lower left')
+
+xt = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+plt.sca(ax1)
+ti = plt.xticks(xt, [str(s/100) for s in xt])
+yl = plt.ylabel('Relative abundance (%)')
+plt.sca(ax2)
+yl = plt.ylabel('Number of ASVs')
+plt.sca(ax3)
+yl = plt.ylabel('Proportion of samples remaining')
+xl = plt.xlabel('Prevalence cut-off')
+
+plt.savefig(folder+'figures/prevalence_cutoff.png', dpi=600, bbox_inches='tight')
+
+df = pd.DataFrame(samples_remaining_df, columns=['Prevalence cut-off', 'Sequence depth cut-off', 'Samples remaining', 'Samples remaining proportion'])
+df.to_csv(folder+'files/prevalence_cutoff.csv')
+```
+
+## Examine plateau
+
+```{python}
+def rarefy(sample, index, size):
+  subsampled_list = random.sample(index, size, counts=sample)
+  new_sample, above_0 = [], 0
+  for s in index:
+    count = subsampled_list.count(s)
+    new_sample.append(count)
+    if count > 0: above_0 += 1
+  return new_sample, above_0
+
+# fake_df = pd.DataFrame([[0, 10, 4, 5, 6, 8, 2], [11, 2, 5, 6, 9, 1, 4]], columns=['sp1', 'sp2', 'sp3', 'sp4', 'sp5', 'sp6', 'sp7'], index=['Sample1', 'Sample2']).transpose()
+# new_sample, above_0 = rarefy([int(i) for i in list(fake_df.loc[:, 'Sample1'].values)], list(fake_df.index.values), 20)
+
+ft = pd.read_csv(folder+'files/feature-table_duplicates_dropped.csv', index_col=0, header=0)
+ft = ft.astype(int)
+plateau = [[], [], [], []]
+asvs = list(ft.index.value
+s)
+count_samples = 0
+for sample in ft.columns:
+  #if count_samples > 10: break
+  this_sample = [int(i) for i in list(ft.loc[:, sample].values)]
+  species = sum([1 for s in this_sample if s > 0])
+  reads = sum(this_sample)
+  new_sample, above_0 = rarefy(this_sample, asvs, int(0.95*reads))
+  if above_0 >= 0.99*species: 
+    plateau[0].append(True)
+    plateau[1].append(True)
+    plateau[2].append(True)
+    plateau[3].append(True)
+  elif above_0 >= 0.97*species: 
+    plateau[0].append(False)
+    plateau[1].append(True)
+    plateau[2].append(True)
+    plateau[3].append(True)
+  elif above_0 >= 0.95*species:
+    plateau[0].append(False)
+    plateau[1].append(False)
+    plateau[2].append(True)
+    plateau[3].append(True)
+  elif above_0 >= 0.9*species:
+    plateau[0].append(False)
+    plateau[1].append(False)
+    plateau[2].append(False)
+    plateau[3].append(True)
+  else:
+    plateau[0].append(False)
+    plateau[1].append(False)
+    plateau[2].append(False)
+    plateau[3].append(False)
+  count_samples += 1
+  print(count_samples)
+#print(plateau)
+
+with open(folder+'files/plateau.list', 'wb') as f:
+  pickle.dump(plateau, f)
+
+finished = True
+```
+
+Look at how many sequences plateaued samples have:
+```{python, eval=FALSE}
+ft = pd.read_csv(folder+'files/feature-table_duplicates_dropped.csv', index_col=0, header=0)
+with open(folder+'files/plateau.list', 'rb') as f:
+  plateau = pickle.load(f)
+  
+sums = ft.sum(axis=0)
+proportion = [0.99, 0.97, 0.95, 0.9]
+for p in range(len(plateau)):
+  red_sums = sums[plateau[p]]
+  red_sums = red_sums[red_sums >= 500]
+  print('Plateau = '+str(proportion[p]*100)+'%: ', len(red_sums), 'samples remaining, range ', str(min(red_sums))+'-'+str(max(red_sums)), 'sequences per sample')
+
+print('Samples >= 1000 reads: ', len(sums[sums >= 1000]), 'samples remaining') 
+print('Samples >= 2000 reads: ', len(sums[sums >= 2000]), 'samples remaining') 
+
+finished = True
+```
+
+## Remove all samples below 1000 or 2000 sequences
+
+```{python}
+ft = pd.read_csv(folder+'files/feature-table_duplicates_dropped.csv', index_col=0, header=0)
+ft = ft.drop(['TAG203638', 'TAG205928dup'], axis=1)
+ft = ft.transpose()
+ft = ft[ft.sum(axis=1) >= 1000]
+ft = ft.transpose()
+ft.to_csv(folder+'files/feature-table_duplicates_dropped_min1000.csv')
+ft = ft.transpose()
+ft = ft[ft.sum(axis=1) >= 2000]
+ft = ft.transpose()
+ft.to_csv(folder+'files/feature-table_duplicates_dropped_min2000.csv')
+```
+
+Look at whether these have plateaued:
+```{python}
+ft = pd.read_csv(folder+'files/feature-table_duplicates_dropped.csv', index_col=0, header=0)
+with open(folder+'files/plateau.list', 'rb') as f:
+  plateau = pickle.load(f)
+  
+plateau_samples = []
+for p in plateau:
+  this_plateau = [ft.columns[s] for s in range(len(ft.columns)) if p[s]]
+  plateau_samples.append(this_plateau)
+  
+ft = pd.read_csv(folder+'files/feature-table_duplicates_dropped_min1000.csv', index_col=0, header=0)
+
+print('Samples >= 1000 sequences', ft.shape[1])
+proportion = [0.99, 0.97, 0.95, 0.9]
+for p in range(len(proportion)):
+  print('Plateau = '+str(proportion[p]*100)+'%: ', ft.loc[:, [s for s in plateau_samples[p] if s in ft.columns]].shape[1], 'of', ft.shape[1], 'samples remaining (', (ft.loc[:, [s for s in plateau_samples[p] if s in ft.columns]].shape[1]/ft.shape[1])*100, '%)')
+  
+ft = pd.read_csv(folder+'files/feature-table_duplicates_dropped_min2000.csv', index_col=0, header=0)
+
+print('Samples >= 2000 sequences', ft.shape[1])
+proportion = [0.99, 0.97, 0.95, 0.9]
+for p in range(len(proportion)):
+  print('Plateau = '+str(proportion[p]*100)+'%: ', ft.loc[:, [s for s in plateau_samples[p] if s in ft.columns]].shape[1], 'of', ft.shape[1], 'samples remaining (', (ft.loc[:, [s for s in plateau_samples[p] if s in ft.columns]].shape[1]/ft.shape[1])*100, '%)')
+
+finished = True
+```
+
+## Calculate alpha diversity repeated rarefaction
+
+Easiest is to make a script using QIIME to repeatedly rarefy, export and calculate alpha diversity?
+```{python}
+ft = pd.read_csv(folder+'files/feature-table_duplicates_dropped_min2000.csv', index_col=0, header=0)
+ft.to_csv(folder+'files/feature-table_duplicates_dropped_min2000.tsv', sep='\t')
+```
+
+```{bash, eval=FALSE}
+#scp files/feature-table_duplicates_dropped_min2000.tsv vulcan:/home/robyn/SickKids_SfS/processing/
+conda activate qiime2-amplicon-2024.5
+qiime tools list-formats --importable
+biom convert -i feature-table_duplicates_dropped_min2000.tsv -o feature-table_duplicates_dropped_min2000.biom --table-type="OTU table" --to-hdf5
+qiime tools import \
+  --input-path feature-table_duplicates_dropped_min2000.biom \
+  --type 'FeatureTable[Frequency]' \
+  --input-format BIOMV210Format \
+  --output-path feature-table_duplicates_dropped_min2000.qza
+
+mkdir repeated_rarefaction
+#mkdir exports
+cp deblur_output_exported/tree.nwk processing/
+cp asvs-tree.qza processing/
+cp deblur_output_exported/taxonomy.tsv processing/
+```
+
+```{python, eval=FALSE}
+import pandas as pd
+from multiprocessing import Pool
+from multiprocessing import freeze_support
+from multiprocessing import Process, Manager
+from skbio.diversity import get_alpha_diversity_metrics, get_beta_diversity_metrics, alpha_diversity, beta_diversity
+from skbio import read
+from skbio.tree import TreeNode
+import os
+
+def rarefy_and_get_alpha(num):
+  print(num)
+  cmd_rare = 'qiime feature-table rarefy --i-table feature-table_duplicates_dropped_min2000.qza --p-sampling-depth 2000 --o-rarefied-table repeated_rarefaction/feature-table_duplicates_dropped_min2000_rare_'+str(num)+'.qza'
+  cmd_export = 'qiime tools export --input-path repeated_rarefaction/feature-table_duplicates_dropped_min2000_rare_'+str(num)+'.qza --output-path repeated_rarefaction/feature-table_duplicates_dropped_min2000_rare_'+str(num)
+  cmd_convert = 'biom convert -i repeated_rarefaction/feature-table_duplicates_dropped_min2000_rare_'+str(num)+'/feature-table.biom -o repeated_rarefaction/feature-table_duplicates_dropped_min2000_rare_'+str(num)+'/feature-table.tsv --to-tsv'
+  os.system(cmd_rare)
+  os.system(cmd_export)
+  os.system(cmd_convert)
+  ft = pd.read_csv('repeated_rarefaction/feature-table_duplicates_dropped_min2000_rare_'+str(num)+'/feature-table.tsv', index_col=0, header=1, sep='\t')
+  metrics = ['chao1', 'faith_pd', 'observed_otus', 'shannon', 'simpson', 'simpson_e']
+  tree = read('tree.nwk', format="newick", into=TreeNode)
+  all_div = []
+  for m in range(len(metrics)):
+    if m == 1:
+      alpha_div = alpha_diversity(metrics[m], ft.transpose(), otu_ids=ft.index.values, tree=tree, validate=False)
+    else:
+      alpha_div = alpha_diversity(metrics[m], ft.transpose())
+    alpha_div = alpha_div.to_frame().rename(columns={0:metrics[m]})
+    alpha_div.index = ft.columns
+    all_div.append(alpha_div)
+  all_div = pd.concat(all_div)
+  all_div = all_div.fillna(value=0)
+  all_div = all_div.groupby(by=all_div.index, axis=0).sum()
+  all_div.to_csv('repeated_rarefaction/alpha_diversity_'+str(num)+'.csv')
+  return
+
+def run_multiprocessing(func, i, n_processors):
+    with Pool(processes=n_processors) as pool:
+        return pool.map(func, i)
+      
+numbers = [i for i in range(1, 101)]
+
+def main():
+    print('Starting processing')
+    run_multiprocessing(rarefy_and_get_alpha, numbers, 24)
+
+if __name__ == "__main__":
+    freeze_support()   # required to use multiprocessing
+    main()
+```
+
+Combine results for each sample:
+```{python, eval=FALSE}
+import pandas as pd
+import numpy as np
+
+numbers = [i for i in range(1, 101)]
+metrics = ['chao1','faith_pd','observed_otus','shannon','simpson','simpson_e']
+dfs = [[], [], [], [], [], []]
+
+for i in numbers:
+  this_rare = pd.read_csv('repeated_rarefaction/alpha_diversity_'+str(i)+'.csv', index_col=0, header=0)
+  this_rare.index.name = 'sample'
+  for j in range(len(metrics)):
+    this_rare_metric = this_rare.loc[:, [metrics[j]]].rename(columns={metrics[j]:str(i)})
+    if i == numbers[0]:
+      dfs[j] = this_rare_metric.copy(deep=True)
+    else:
+      dfs[j] = dfs[j].join(this_rare_metric, on='sample')
+
+for j in range(len(dfs)):
+  df_mean = dfs[j].mean(axis=1)
+  df_std = dfs[j].std(axis=1)
+  df_upper = df_mean+df_std
+  df_lower = df_mean-df_std
+  dfs[j]['Mean'] = df_mean
+  dfs[j]['Upper'] = df_upper
+  dfs[j]['Lower'] = df_lower
+  dfs[j].to_csv('alpha_'+metrics[j]+'.csv')
+```
+
+Now copy back across:
+```{bash, eval=FALSE}
+#vulcan
+mkdir alpha_diversity
+mv alpha_* alpha_diversity/
+
+#local
+cd /Users/robynwright/Dropbox/Langille_Lab_postdoc/SfS_SickKids/analysis_all_samples/QIIME2
+mkdir processing
+scp vulcan:/home/robyn/SickKids_SfS/processing/alpha_diversity processing/
+```
+
+Rename:
+```{python}
+metrics = ['chao1','faith_pd','observed_otus','shannon','simpson','simpson_e']
+for metric in metrics:
+  alpha = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_'+metric+'.csv', index_col=0, header=0)
+  alpha = alpha.rename(index={'TAG206052a':'TAG206052'})
+  alpha.to_csv(folder+'QIIME2/processing/alpha_diversity/alpha_'+metric+'.csv')
+```
+
+### Plot
+
+```{python}
+# ft = pd.read_csv(folder+'files/feature-table_duplicates_dropped_min2000.csv', index_col=0, header=0)
+# num_seqs = pd.DataFrame(ft.sum(axis=0)).rename(columns={0:'Sums'})
+#num_seqs = num_seqs.sort_values(by=['Sums'], ascending=True)
+
+metrics = ['chao1','faith_pd','observed_otus','shannon','simpson','simpson_e']
+for metric in metrics:
+  alpha = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_'+metric+'.csv', index_col=0, header=0)
+  #alpha = alpha.loc[num_seqs.index.values, :]
+  alpha = alpha.sort_values(by=['Mean'], ascending=True)
+  fig = plt.figure(figsize=(6,6))
+  ax1 = plt.subplot(111)
+  pl = ax1.plot([i for i in range(len(alpha.index.values))], alpha.loc[:, 'Mean'].values, 'k-')
+  ti = ax1.set_title(metric, fontweight='bold')
+  yl = ax1.set_ylabel('Diversity')
+  xl = ax1.set_xlabel('Samples (sorted by mean diversity)')
+  xt = plt.xticks([])
+  pl = ax1.fill_between([i for i in range(len(alpha.index.values))], alpha.loc[:, 'Upper'].values, alpha.loc[:, 'Lower'].values, color='r', alpha=0.5)
+  plt.savefig(folder+'figures/alpha_repeated_rarefaction_'+metric+'.png', dpi=600, bbox_inches='tight')
+  plt.show()
+
+finished = True
+```
+
+## Calculate beta diversity
+
+Phylogenetic RPCA:
+```{bash, eval=FALSE}
+mkdir phylo_rpca
+
+#edited header columns to Feature ID and Taxon
+qiime tools import \
+  --type 'FeatureData[Taxonomy]' \
+  --input-path taxonomy.tsv \
+  --output-path taxonomy.qza
+
+qiime dev refresh-cache
+pip install gemelli
+qiime gemelli phylogenetic-rpca-with-taxonomy \
+    --i-table feature-table_duplicates_dropped_min2000.qza \
+    --i-phylogeny asvs-tree.qza \
+    --m-taxonomy-file taxonomy.qza \
+    --p-min-feature-count 0 \
+    --p-min-sample-count 0 \
+    --o-biplot phylo_rpca/phylo-ordination.qza \
+    --o-distance-matrix phylo_rpca/phylo-distance.qza \
+    --o-counts-by-node-tree phylo_rpca/phylo-tree.qza \
+    --o-counts-by-node phylo_rpca/phylo-table.qza \
+    --o-t2t-taxonomy phylo_rpca/phylo-taxonomy.qza
+    
+qiime tools export \
+  --input-path phylo_rpca/phylo-ordination.qza \
+  --output-path phylo_rpca
+
+qiime tools export \
+  --input-path phylo_rpca/phylo-distance.qza \
+  --output-path phylo_rpca
+```
+
+```{python}
+from skbio.diversity import get_alpha_diversity_metrics, get_beta_diversity_metrics, alpha_diversity, beta_diversity
+from skbio import read
+from skbio.tree import TreeNode
+import pandas as pd
+from deicode.preprocessing import rclr
+from skbio.stats.composition import clr
+from scipy.spatial import distance
+import numpy as np
+import os
+
+metrics = ['clr', 'rclr', 'braycurtis', 'weighted_unifrac', 'unweighted_unifrac']
+ft = pd.read_csv('feature-table_duplicates_dropped_min2000.tsv', index_col=0, header=0, sep='\t')
+ft = ft[ft.max(axis=1) > 0]
+ft_relabun = ft.copy(deep=True)
+ft_relabun = ft_relabun.divide(ft_relabun.sum(axis=0), axis=1).multiply(100)
+tree = read('tree.nwk', format="newick", into=TreeNode)
+
+for m in range(len(metrics)):
+  metric = metrics[m]
+  print(metric)
+  if os.path.exists(metric+'.csv'): continue
+  if 'clr' not in metric:
+    sample_df = ft_relabun.copy(deep=True)
+    X = ft_relabun.transpose().iloc[0:].values
+  else:
+    sample_df = ft.copy(deep=True)
+  if metric == 'clr':
+    sample_df[sample_df == 0] = 1 #add pseudocount
+    for col in sample_df.columns:
+      sample_df.loc[:, col] = clr(sample_df.loc[:, col].values)
+    X = sample_df.transpose().iloc[0:].values
+  elif metric == 'rclr':
+    X = sample_df.iloc[0:].values
+    rclr_sample = rclr(X)
+    rclr_sample = pd.DataFrame(rclr_sample, columns=sample_df.columns, index=sample_df.index.values).fillna(value=0)
+    X = rclr_sample.transpose().iloc[0:].values
+  if 'unifrac' not in metric:
+    if 'clr' in metric: dist_met = 'euclidean'
+    else: dist_met = metric
+    #similarities = beta_diversity(dist_met, X, sample_df.columns, otu_ids=sample_df.index.values, validate=False)
+    #similarities = similarities.to_data_frame()
+    similarities = np.nan_to_num(distance.cdist(X, X, dist_met)) 
+    similarities = pd.DataFrame(similarities, index=sample_df.columns, columns=sample_df.columns)
+  else:
+    sample_df.index = sample_df.index.map(str)
+    similarities = beta_diversity(metric, X, sample_df.columns, tree=tree, otu_ids=sample_df.index.values, validate=False)
+    similarities = similarities.to_data_frame()
+  similarities.to_csv(metric+'.csv')
+    
+#UniFrac seems to take a really long time with Python - it's been running since before the weekend and hasn't finished yet. Move to R instead
+```
+
+```{R, eval=FALSE}
+library(phyloseq)
+
+table <- read.csv('feature-table_duplicates_dropped_min2000.tsv', sep="\t")
+phy_tree <- read_tree('tree.nwk')
+table_num = data.matrix(table[, 2:4846])
+rownames(table_num) = table[,1]
+table = as.matrix(table_num)
+
+TABLE = otu_table(table, taxa_are_rows = TRUE)
+physeq = phyloseq(TABLE,phy_tree)
+
+distance <- phyloseq::distance(physeq, method="wunifrac")
+dist_mat = as.matrix(distance)
+write.csv(dist_mat, 'weighted_unifrac.csv')
+
+distance <- phyloseq::distance(physeq, method="unifrac")
+dist_mat = as.matrix(distance)
+write.csv(dist_mat, 'unweighted_unifrac.csv')
+```
+
+
+
+## Remove excluded participants from metadata
+
+```{python}
+md = pd.read_excel(folder_all+'SFS2- Data Pull - UPDATED November 2024- For Robyn.xlsx', sheet_name='FINAL', header=1, index_col=0)
+excluded = pd.read_excel(folder_all+'Excluded Participants Spit 2.xlsx', sheet_name='Excluded Participants', header=0, index_col=0)
+
+md_rename = {}
+for row in md.index:
+  md_rename[row] = row.replace('t', 'T').replace('a', 'A').replace('g', 'G')
+md = md.rename(index=md_rename)
+
+dropping = []
+for row in md.index.values:
+  if row in excluded.index.values:
+    dropping.append(row)
+md = md.drop(dropping, axis=0)
+
+md.to_csv(folder+'files/metadata_full.csv')
+```
+
+## Calculate percentiles
+
+```{python}
+md = pd.read_csv(folder+'files/metadata_full.csv', header=0, index_col=0)
+
+scores = ['swan_gender_tscores', 'swan_ia_gender_tscores', 'swan_hi_gender_tscores', 
+          'swan_tscores', 'swan_ia_tscores', 'swan_hi_tscores', 
+          'tocs21_gender_tscores', 'tocs21_tscores', 
+          'rcads_anx_tscore_official', 'rcads_dep_tscore_official', 'rcads_tot_tscore_official', 
+          'rcads_anx_gender_study_tscores', 'rcads_dep_gender_study_tscores', 'rcads_gender_study_tscores', 
+          'rcads_anx_study_tscores', 'rcads_dep_study_tscores', 'rcads_study_tscores', 
+          'tides_gender_study_tscores', 'tides_study_tscores',
+          'aq_gender_study_tscores', 'aq_nopat_gender_study_tscores',
+          'aq_study_tscores', 'aq_nopat_study_tscores']
+
+new_scores = ['swantot_gender', 'swania_gender', 'swanhi_gender', 
+          'swantot', 'swania', 'swanhi', 
+          'tocs21_gender', 'tocs21', 
+          'rcadsanx_official', 'rcadsdep_official', 'rcadstot_official', 
+          'rcadsanx_gender_study', 'rcadsdep_gender_study', 'rcadstot_gender_study', 
+          'rcadsanx_study', 'rcadsdep_study', 'rcadstot', 
+          'tides_gender', 'tides_study',
+          'aq_gender_study', 'aqnopat_gender_study',
+          'aq_study', 'aqnopat_study']
+
+
+top_bot_pc = {'swan':[5, 10], 'tocs':[1, 5, 10], 'rcadsanx':[1, 5, 10], 'rcadsdep':[5, 10], 'rcadstot':[2, 5, 10], 'tides':[5, 10], 'aq':[3, 5, 10]}
+
+mid_pc = 25
+for s in range(len(scores)):
+  percentiles = []
+  for tb in top_bot_pc:
+    if tb in new_scores[s]:
+      percentiles = top_bot_pc[tb]
+  for tb in percentiles:
+    score = scores[s]
+    values = np.array(md[score].dropna().to_list())
+    #print(score, len(values), np.percentile(values, 50), np.percentile(values,100-top_bot_pc))
+    top_pc = np.percentile(values,100-tb)
+    bot_pc = np.percentile(values,tb)
+    mid_top_pc = np.percentile(values,50+mid_pc)
+    mid_bot_pc = np.percentile(values,50-mid_pc)
+    col_name = new_scores[s]+'_'+str(tb)+'_mid'+str(mid_pc*2)
+    md[col_name] = ''
+    for row in md.index.values:
+      if md.loc[row, score] >= top_pc:
+        md.loc[row, col_name] = 1
+      elif md.loc[row, score] <= bot_pc:
+        md.loc[row, col_name] = 2
+      elif md.loc[row, score] <= mid_top_pc and md.loc[row, score] >= mid_bot_pc:
+        md.loc[row, col_name] = 0
+    for val in [1]:
+      #print(score, tb, val, md[col_name].dropna().to_list().count(val))
+      print(score, tb, md[col_name].dropna().to_list().count(val))
+
+for s in range(len(new_scores)):
+  score = new_scores[s]
+  percentiles = []
+  for tb in top_bot_pc:
+    if tb in new_scores[s]:
+      percentiles = top_bot_pc[tb]
+  for tb in percentiles:
+    values = md[score+'_'+str(tb)+'_mid'+str(mid_pc*2)].dropna().to_list()
+    print(score+'_'+str(tb)+'_mid'+str(mid_pc*2), values.count(1))
+
+row_rename = {}
+for row in md.index.values:
+  row_rename[row] = row.upper()
+md = md.rename(index=row_rename)
+
+md.to_csv(folder+'files/metadata_full_percentiles.csv')
+```
+
+## Initial filtering and creation of files
+
+```{python}
+ft = pd.read_csv(folder+'files/feature-table_duplicates_dropped_min2000.csv', index_col=0, header=0).rename(columns={'TAG206052a':'TAG206052'})
+md = pd.read_csv(folder+'files/metadata_full_percentiles.csv', index_col=0, header=0)
+
+dropping = []
+for col in ft.columns:
+  if col not in md.index.values:
+    dropping.append(col)
+
+print(len(dropping))
+
+ft = ft.drop(dropping, axis=1)
+ft_samples = list(ft.columns)
+
+md = md.loc[ft_samples, :]
+md.loc[md['gender'] == 1, 'gender'] = 'Male'
+md.loc[md['gender'] == 2, 'gender'] = 'Female'
+
+md.to_csv(folder+'files/metadata_microbiome_only.csv')
+ft.to_csv(folder+'files/feature-table-metadata-processed.csv')
+```
+
+Add SES and diet scores:
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_only.csv', index_col=0, header=0)
+ses = pd.read_csv(folder_all+'sfs_deprivation_09jan2025.csv', index_col=0, header=0)
+diet = pd.read_csv(folder_all+'sfs2_diet-09jan2025.csv', index_col=0, header=0)
+
+ses = ses.loc[md.index.values, :]
+md = md.join(ses)
+md['HEFI'] = ''
+for row in md.index.values:
+  if row in diet.index.values:
+    md.loc[row, 'HEFI'] = diet.loc[row, 'HEFI']
+
+md.to_csv(folder+'files/metadata_microbiome_only_plus_diet_ses.csv')
+
+```
+
+Add reported mental/physical health condition and recoding of diet questions:
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses.csv', index_col=0, header=0)
+mental_conditions = ['dx_adhd', 'dx_ocd', 'dx_asd', 'dx_dep', 'dx_anx', 'dx_eatdis', 'dx_bp', 'dx_id', 'dx_ld', 'dx_odd', 'dx_schizo', 'dx_schizo_bp', 'dx_spcd', 'dx_subuse', 'dx_tics']
+physical_conditions = ['dx_allergies', 'dx_asthma', 'dx_autoimm', 'dx_cp', 'dx_epi_seiz', 'dx_genetic', 'dx_migraine2', 'dx_hearing', 'dx_visual', 'dx_mobility']
+
+md['physical_condition'] = ''
+md['mental_condition'] = ''
+for row in md.index.values:
+  md_part = md.loc[row, mental_conditions].dropna().values
+  if len(md_part) == 0:
+    md.loc[row, 'mental_condition'] = 0
+  else:
+    md.loc[row, 'mental_condition'] = max(md_part)
+  md_part = md.loc[row, physical_conditions].dropna().values
+  if len(md_part) == 0:
+    md.loc[row, 'physical_condition'] = 0
+  else:
+    md.loc[row, 'physical_condition'] = max(md_part)
+    
+md['physical_mental_condition'] = md['physical_condition']+md['mental_condition']
+    
+for row in md.index.values:
+  if md.loc[row, 'physical_mental_condition'] == 2:
+    md.loc[row, 'physical_mental_condition'] = 'mental_and_physical'
+  elif md.loc[row, 'physical_mental_condition'] == 0:
+    md.loc[row, 'physical_mental_condition'] = 'no_reported_condition'
+  elif md.loc[row, 'physical_mental_condition'] == 1:
+    if md.loc[row, 'physical_condition'] == 1:
+      md.loc[row, 'physical_mental_condition'] = 'physical_condition'
+    else:
+      md.loc[row, 'physical_mental_condition'] = 'mental_condition'
+  else:
+    print(row)
+
+md = md.rename(columns={'dsq3':'antibiotics', 'dsq1':'strict_diet'})
+for row in md.index.values:
+  if md.loc[row, 'strict_diet'] == 0:
+    md.loc[row, 'strict_diet'] = 'vegetarian'
+  elif md.loc[row, 'strict_diet'] == 1:
+    md.loc[row, 'strict_diet'] = 'vegan'
+  elif md.loc[row, 'strict_diet'] == 2:
+    md.loc[row, 'strict_diet'] = 'omnivore'
+  if md.loc[row, 'antibiotics'] == 0:
+    md.loc[row, 'antibiotics'] = 'no'
+  elif md.loc[row, 'antibiotics'] in [1, 2, 3, 4, 5, 6, 7, 8]:
+    md.loc[row, 'antibiotics'] = 'in_the_last_month'
+
+md.to_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental.csv')
+```
+
+## Summary of metadata
+
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_only.csv', index_col=0, header=0)
+ages = md.loc[:, 'age'].values
+print('Number of participants = ', md.shape[0])
+print('Age mean = ', np.mean(ages), ', median =', np.median(ages), '(range =', min(ages), '-', max(ages), ')')
+#print(sorted(ages))
+gender = list(md.loc[:, 'gender'].values)
+print('Males: n =', gender.count(1), ', females: n =', gender.count(2))
+print('Percent females: ', (gender.count(2)/(md.shape[0]))*100)
+print('Percent Males: ', (gender.count(1)/(md.shape[0]))*100)
+ethnicities = set(md.loc[:, 'ethnicity'].values)
+print(ethnicities)
+for ethnicity in ethnicities:
+  md_ethnicity = md[md['ethnicity'] == ethnicity]
+  gender_ethnicity = list(md_ethnicity.loc[:, 'gender'].values)
+  print(ethnicity, ': n = ', md_ethnicity.shape[0], ', percent females: ', (gender_ethnicity.count(2)/(gender_ethnicity.count(1)+gender_ethnicity.count(2)))*100)
+  
+diagnoses = [['dx_adhd'], ['dx_ocd'], ['dx_asd'], ['dx_dep'], ['dx_anx'], ['dx_eatdis', 'dx_bp', 'dx_id', 'dx_ld', 'dx_odd', 'dx_schizo', 'dx_spcd', 'dx_subuse', 'dx_tics', 'dx_schizo_bp']]
+for diagnosis in diagnoses:
+  md_diagnosis = md.loc[:, diagnosis][md.loc[:, diagnosis].max(axis=1) > 0]
+  md_diagnosis_full = md.loc[md_diagnosis.index.values, :]
+  name = diagnosis[0]
+  if len(diagnosis) > 1:
+    name = 'Other'
+  gender_diagnosis = list(md_diagnosis_full.loc[:, 'gender'].values)
+  print(name, ': n =', md_diagnosis_full.shape[0], ', percent participants: ', (md_diagnosis_full.shape[0]/md.shape[0])*100)
+  print('Percent females: ', (gender_diagnosis.count(2)/(gender_diagnosis.count(1)+gender_diagnosis.count(2)))*100, ', females: n =', gender_diagnosis.count(2), ', males: n =', gender_diagnosis.count(1), '\n')
+  
+new_scores = ['swantot_gender', 'swania_gender', 'swanhi_gender', 
+          'swantot', 'swania', 'swanhi', 
+          'tocs21_gender', 'tocs21', 
+          'rcadsanx_official', 'rcadsdep_official', 'rcadstot_official', 
+          'rcadsanx_gender_study', 'rcadsdep_gender_study', 'rcadstot_gender_study', 
+          'rcadsanx_study', 'rcadsdep_study', 'rcadstot', 
+          'tides_gender', 'tides_study',
+          'aq_gender_study', 'aqnopat_gender_study',
+          'aq_study', 'aqnopat_study']
+
+top_bot_pc = {'swan':[5, 10], 'tocs':[1, 5, 10], 'rcadsanx':[1, 5, 10], 'rcadsdep':[5, 10], 'rcadstot':[2, 5, 10], 'tides':[5, 10], 'aq':[3, 5, 10]}
+
+for score in new_scores:
+  for name in top_bot_pc:
+    if name in score:
+      percents = top_bot_pc[name]
+  for pc in percents:
+    name = score+'_'+str(pc)+'_mid50'
+    md_score = md.loc[:, name][md.loc[:, name] == 1]
+    md_score_full = md.loc[md_score.index.values, :]
+    gender_score = list(md_score_full.loc[:, 'gender'].values)
+    print(name, ': n =', md_score_full.shape[0], ', ', str(round((md_score_full.shape[0]/md.shape[0])*100, 2))+'%')
+    print('Females: ', str(round((gender_score.count(2)/(gender_score.count(1)+gender_score.count(2)))*100, 2))+'%', '\n')#, ', females: n =', gender_score.count(2), ', males: n =', gender_score.count(1), '\n')
+
+  
+finished = True
+```
+
+Metadata diagnosis male/female graph:
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_only.csv', index_col=0, header=0)
+diagnoses = [['dx_adhd'], ['dx_anx'], ['dx_asd'], ['dx_dep'], ['dx_ocd']]
+labels = {'dx_adhd':'ADHD', 'dx_ocd':'OCD', 'dx_asd':'Autism', 'dx_dep':'Depression', 'dx_anx':'Anxiety'}
+
+plt.figure(figsize=(5,5))
+ax = plt.subplot(111)
+
+count = 6
+labels_list, nums = [], []
+for diagnosis in diagnoses:
+  md_diagnosis = md.loc[:, diagnosis][md.loc[:, diagnosis].max(axis=1) > 0]
+  md_diagnosis_full = md.loc[md_diagnosis.index.values, :]
+  name = diagnosis[0]
+  gender_diagnosis = list(md_diagnosis_full.loc[:, 'gender_inferred'].values)
+  age_diagnosis = list(md_diagnosis_full.loc[:, 'age_at_enrollment'].values)
+  percent_females = (gender_diagnosis.count('Female')/(gender_diagnosis.count('Male')+gender_diagnosis.count('Female')))*100
+  percent_males = 100-percent_females
+  b = ax.barh(count, percent_females, left = 0, color=colors_gender['Female'], edgecolor='#3B434B')
+  labels_list.append(labels[diagnosis[0]])
+  nums.append(count)
+  t = ax.text(percent_females/2, count, str(round(percent_females, 1))+'%', ha='center', va='center', color='w')
+  b = ax.barh(count, percent_males, left = percent_females, color=colors_gender['Male'], edgecolor='#3B434B')
+  t = ax.text(100-(percent_males/2), count, str(round(percent_males, 1))+'%', ha='center', va='center', color='k')
+  count -= 1
+
+yt = plt.yticks(nums, labels_list, fontweight='bold')
+xt = plt.xticks([])
+xl = plt.xlim([0, 100])
+
+plt.savefig(folder+'figures/metadata_diagnoses_gender_summary.png', dpi=600, bbox_inches='tight')
+  
+#help(plt.barh)
+  
+```
+
+Metadata diagnosis ethnicity graph:
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_only.csv', index_col=0, header=0)
+diagnoses = [['dx_adhd'], ['dx_anx'], ['dx_asd'], ['dx_dep'], ['dx_ocd']]
+traits = [['swantot_5_mid50', 'swania_5_mid50', 'swanhi_5_mid50'], ['rcadsanx_10_mid50'], [''], ['rcadstot_2_mid50'], ['tocs_1_mid50']]
+labels = {'dx_adhd':'ADHD', 'dx_ocd':'OCD', 'dx_asd':'Autism', 'dx_dep':'Depression', 'dx_anx':'Anxiety'}
+ethnicities = ['East Asian', 'South Asian', 'White']
+
+plt.figure(figsize=(10,5))
+ax1 = plt.subplot(131)
+ax2 = plt.subplot(132)
+ax3 = plt.subplot(133)
+
+axes = [ax1, ax2, ax3]
+
+count = 6
+labels_list, nums = [], []
+for diagnosis in diagnoses:
+  md_diagnosis = md.loc[:, diagnosis][md.loc[:, diagnosis].max(axis=1) > 0]
+  md_diagnosis_full = md.loc[md_diagnosis.index.values, :]
+  name = diagnosis[0]
+  ethnicity_diagnosis = list(md_diagnosis_full.loc[:, 'ethnicity'].values)
+  ethnicity_full = list(md.loc[:, 'ethnicity'].values)
+  for e in range(len(ethnicities)):
+    ethnicity = ethnicities[e]
+    #print(diagnosis, ethnicity, (ethnicity_diagnosis.count(ethnicity)/ethnicity_full.count(ethnicity))*100)
+    diagnosis_percent = (ethnicity_diagnosis.count(ethnicity)/ethnicity_full.count(ethnicity))*100
+    b = axes[e].barh(count, diagnosis_percent, color=colors_ethnicity[ethnicity], edgecolor='#3B434B')
+    if count > 4 and e == 2:
+      t = axes[e].text(diagnosis_percent/2, count, str(round(diagnosis_percent, 1))+'%', ha='center', va='center', color='w')
+    else:
+      t = axes[e].text(diagnosis_percent+0.5, count, str(round(diagnosis_percent, 1))+'%', ha='left', va='center', color='k')
+  labels_list.append(labels[diagnosis[0]])
+  nums.append(count)
+  count -= 1
+  
+for a in range(len(axes)):
+  plt.sca(axes[a])
+  if a == 0:
+    yt = plt.yticks(nums, labels_list, fontweight='bold')
+  else:
+    yt = plt.yticks(nums, [])
+  xl = plt.xlim([0, 15])
+  ti = plt.title(ethnicities[a], fontweight='bold')
+  xl = plt.xlabel('Participants (%)')
+
+plt.savefig(folder+'figures/metadata_diagnoses_ethnicity_summary.png', dpi=600, bbox_inches='tight')
+  
+#help(plt.barh)
+  
+```
+
+Metadata diagnosis and traits ethnicity graph:
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_only.csv', index_col=0, header=0)
+diagnoses = [['dx_adhd'], ['dx_anx'], ['dx_asd'], ['dx_dep'], ['dx_ocd']]
+traits = [['swantot_5_mid50', 'swania_5_mid50', 'swanhi_5_mid50'], ['rcadsanx_10_mid50'], [''], ['rcadsdep_2_mid50'], ['tocs_1_mid50']]
+labels = {'dx_adhd':'ADHD', 'dx_ocd':'OCD', 'dx_asd':'Autism', 'dx_dep':'Depression', 'dx_anx':'Anxiety'}
+ethnicities = ['East Asian', 'South Asian', 'White']
+
+plt.figure(figsize=(10,5))
+ax1 = plt.subplot(131)
+ax2 = plt.subplot(132)
+ax3 = plt.subplot(133)
+
+axes = [ax1, ax2, ax3]
+
+count = 6
+labels_list, nums = [], []
+for d in range(len(diagnoses)):
+  diagnosis = diagnoses[d]
+  md_diagnosis = md.loc[:, diagnosis][md.loc[:, diagnosis].max(axis=1) > 0]
+  md_diagnosis_full = md.loc[md_diagnosis.index.values, :]
+  name = diagnosis[0]
+  ethnicity_diagnosis = list(md_diagnosis_full.loc[:, 'ethnicity'].values)
+  ethnicity_full = list(md.loc[:, 'ethnicity'].values)
+  if traits[d][0] != '':
+    if len(traits[d]) > 1:
+      all_traits = []
+      for t in traits[d]:
+        md_traits = md[md.loc[:, t] == 1]
+        all_traits.extend(list(md_traits.index.values))
+      all_traits = list(set(all_traits))
+      md_traits = md.loc[all_traits, :]
+    else:
+      md_traits = md[md.loc[:, traits[d][0]] == 1]
+    ethnicity_traits = list(md_traits.loc[:, 'ethnicity'].values)
+  for e in range(len(ethnicities)):
+    ethnicity = ethnicities[e]
+    #print(diagnosis, ethnicity, (ethnicity_diagnosis.count(ethnicity)/ethnicity_full.count(ethnicity))*100)
+    diagnosis_percent = (ethnicity_diagnosis.count(ethnicity)/ethnicity_full.count(ethnicity))*100
+    traits_percent = (ethnicity_traits.count(ethnicity)/ethnicity_full.count(ethnicity))*100
+    b = axes[e].barh(count+0.2, diagnosis_percent, height=0.4, color=colors_ethnicity[ethnicity], edgecolor='#3B434B')
+    if count > 4 and e == 2: t = axes[e].text(diagnosis_percent/2, count+0.2, str(round(diagnosis_percent, 1))+'%', ha='center', va='center', color='w')
+    else: t = axes[e].text(diagnosis_percent+0.5, count+0.2, str(round(diagnosis_percent, 1))+'%', ha='left', va='center', color='k')
+    # if traits[d][0] != '':
+    #   b = axes[e].barh(count-0.2, traits_percent, height=0.4, color=colors_ethnicity[ethnicity], edgecolor='#3B434B', alpha=0.5)
+    #   if count > 5 and e == 2: t = axes[e].text(traits_percent/2, count-0.2, str(round(traits_percent, 1))+'%', ha='center', va='center', color='w')
+    #   else: t = axes[e].text(traits_percent+0.5, count-0.2, str(round(traits_percent, 1))+'%', ha='left', va='center', color='k')
+  labels_list.append(labels[diagnosis[0]])
+  nums.append(count)
+  count -= 1
+  
+for a in range(len(axes)):
+  plt.sca(axes[a])
+  if a == 0:
+    yt = plt.yticks(nums, labels_list, fontweight='bold')
+  else:
+    yt = plt.yticks(nums, [])
+  xl = plt.xlim([0, 20])
+  ti = plt.title(ethnicities[a], fontweight='bold')
+  xl = plt.xlabel('Participants (%)')
+
+plt.savefig(folder+'figures/metadata_diagnoses_traits_ethnicity_summary.png', dpi=600, bbox_inches='tight')
+  
+#help(plt.barh)
+  
+```
+
+## Alpha diversity
+
+### Stats
+
+```{python}
+metrics = ['chao1','faith_pd','observed_otus','shannon','simpson','simpson_e']
+md = pd.read_csv(folder+'files/metadata_microbiome_only.csv', index_col=0, header=0)
+md = md[md['gender'].notnull()]
+md = md[md['ethnicity'].isin(['South Asian', 'East Asian', 'White'])]
+alpha_dfs = []
+male_dfs = []
+female_dfs = []
+white_dfs = []
+east_asian_dfs = []
+south_asian_dfs = []
+
+for metric in metrics:
+  if metric != 'simpson': continue
+  alpha = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_'+metric+'.csv', index_col=0, header=0).loc[:, ['Mean']].rename(columns={'Mean':'Diversity'})
+  alpha = alpha.loc[[m for m in md.index.values if m in alpha.index.values], :]
+  md_red = md.copy(deep=True).loc[alpha.index, ['gender', 'ethnicity', 'age']]
+  md_red['Diversity'] = alpha.loc[md_red.index.values, 'Diversity']
+  alpha_dfs.append(md_red)
+  male_dfs.append(md_red[md_red['gender'] == 'Male'])
+  female_dfs.append(md_red[md_red['gender'] == 'Female'])
+  white_dfs.append(md_red[md_red['ethnicity'] == 'White'])
+  east_asian_dfs.append(md_red[md_red['ethnicity'] == 'East Asian'])
+  south_asian_dfs.append(md_red[md_red['ethnicity'] == 'South Asian'])
+
+finished = True
+```
+
+```{R}
+# overall
+# alpha_dfs = py$alpha_dfs
+# metrics = c('chao1','faith_pd','observed_otus','shannon','simpson','simpson_e')
+# 
+# for (i in 1:length(alpha_dfs)) {
+#     table = alpha_dfs[[i]]
+#     print(metrics[i])
+#     mod = aov(Diversity ~ gender * ethnicity * age, data=table)
+#     print(summary(mod))
+#     #print(TukeyHSD(mod, "ethnicity"))
+#     #print(TukeyHSD(mod, "age"))
+# }
+# 
+# table = alpha_dfs[[6]]
+# mod = aov(Diversity ~ gender * ethnicity * age, data=table)
+# TukeyHSD(mod, "ethnicity")
+
+# female
+alpha_dfs = py$female_dfs
+metrics = c('chao1','faith_pd','observed_otus','shannon','simpson','simpson_e')
+
+for (i in 1:length(alpha_dfs)) {
+    table = alpha_dfs[[i]]
+    print(metrics[i])
+    mod = aov(Diversity ~  ethnicity * age, data=table)
+    #print(summary(mod))
+    print(TukeyHSD(mod, "ethnicity"))
+    #print(TukeyHSD(mod, "age"))
+}
+
+# male
+alpha_dfs = py$male_dfs
+metrics = c('chao1','faith_pd','observed_otus','shannon','simpson','simpson_e')
+
+for (i in 1:length(alpha_dfs)) {
+    table = alpha_dfs[[i]]
+    print(metrics[i])
+    mod = aov(Diversity ~  ethnicity * age, data=table)
+    print(summary(mod))
+    #print(TukeyHSD(mod, "ethnicity"))
+    #print(TukeyHSD(mod, "age"))
+}
+
+# east asian
+alpha_dfs = py$east_asian_dfs
+metrics = c('chao1','faith_pd','observed_otus','shannon','simpson','simpson_e')
+
+for (i in 1:length(alpha_dfs)) {
+    table = alpha_dfs[[i]]
+    print(metrics[i])
+    mod = aov(Diversity ~  gender * age, data=table)
+    print(summary(mod))
+    #print(TukeyHSD(mod, "ethnicity"))
+    #print(TukeyHSD(mod, "age"))
+}
+
+# south asian
+alpha_dfs = py$south_asian_dfs
+metrics = c('chao1','faith_pd','observed_otus','shannon','simpson','simpson_e')
+
+for (i in 1:length(alpha_dfs)) {
+    table = alpha_dfs[[i]]
+    print(metrics[i])
+    mod = aov(Diversity ~  gender * age, data=table)
+    print(summary(mod))
+    #print(TukeyHSD(mod, "ethnicity"))
+    #print(TukeyHSD(mod, "age"))
+}
+
+# white
+alpha_dfs = py$white_dfs
+metrics = c('chao1','faith_pd','observed_otus','shannon','simpson','simpson_e')
+
+for (i in 1:length(alpha_dfs)) {
+    table = alpha_dfs[[i]]
+    print(metrics[i])
+    mod = aov(Diversity ~  gender * age, data=table)
+    print(summary(mod))
+    #print(TukeyHSD(mod, "ethnicity"))
+    #print(TukeyHSD(mod, "age"))
+}
+```
+
+### With diet and SES and physical/mental
+
+```{python}
+metrics = ['chao1','faith_pd','observed_otus','shannon','simpson','simpson_e']
+md = pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental.csv', index_col=0, header=0)
+md = md[md['gender'].notnull()]
+# md = md[md['HEFI'].notnull()]
+# md = md[md['cur_msd_soc'].notnull()]
+# md = md[md['cur_msd_mat'].notnull()]
+md = md[md['ethnicity'].isin(['South Asian', 'East Asian', 'White'])]
+alpha_dfs = []
+# male_dfs = []
+# female_dfs = []
+# white_dfs = []
+# east_asian_dfs = []
+# south_asian_dfs = []
+
+for metric in metrics:
+  #if metric != 'simpson': continue
+  alpha = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_'+metric+'.csv', index_col=0, header=0).loc[:, ['Mean']].rename(columns={'Mean':'Diversity'})
+  alpha = alpha.loc[[m for m in md.index.values if m in alpha.index.values], :]
+  md_red = md.copy(deep=True).loc[alpha.index, ['gender', 'ethnicity', 'age', 'HEFI', 'cur_msd_soc', 'cur_msd_mat', 'antibiotics', 'physical_mental_condition', 'strict_diet', 'dsq2', 'dsq4', 'dsq5', 'dsq6', 'dsq7', 'dsq8', 'dsq9', 'dsq10', 'dsq11', 'dsq12', 'dsq13', 'dsq14', 'dsq15', 'dsq16', 'dsq17', 'dsq18', 'dsq19', 'dsq20', 'dsq21', 'dsq22', 'dsq23']]
+  md_red['Diversity'] = alpha.loc[md_red.index.values, 'Diversity']
+  alpha_dfs.append(md_red)
+  md_red.to_csv(folder+'intermediate/'+metric+'_diet_ses_physical_mental.csv')
+  # male_dfs.append(md_red[md_red['gender'] == 'Male'])
+  # female_dfs.append(md_red[md_red['gender'] == 'Female'])
+  # white_dfs.append(md_red[md_red['ethnicity'] == 'White'])
+  # east_asian_dfs.append(md_red[md_red['ethnicity'] == 'East Asian'])
+  # south_asian_dfs.append(md_red[md_red['ethnicity'] == 'South Asian'])
+
+finished = True
+```
+
+```{R}
+# overall
+metrics = c('chao1','faith_pd','observed_otus','shannon','simpson','simpson_e')
+
+for (i in 1:length(metrics)) {
+    # table = alpha_dfs[[i]]
+    table = read.csv(paste(py$folder, "intermediate/", metrics[i], "_diet_ses_physical_mental.csv", sep=""))
+    print(metrics[i])
+    mod = aov(Diversity ~ gender + ethnicity + age + HEFI + cur_msd_soc + cur_msd_mat + antibiotics + physical_mental_condition, data=table)
+    print(summary(mod))
+    capture.output(summary(mod),file=paste(py$folder, "files/alpha_stats/", metrics[i], "_all_vars_added.csv", sep="")) 
+    mod = aov(Diversity ~ gender * ethnicity * age * HEFI * cur_msd_soc * cur_msd_mat * antibiotics * physical_mental_condition, data=table)
+    print(summary(mod))
+    capture.output(summary(mod),file=paste(py$folder, "files/alpha_stats/", metrics[i], "_all_vars_interaction.csv", sep="")) 
+    #these outputs have to be manually modified
+    print('\n\n\n')
+    #print(TukeyHSD(mod, "ethnicity"))
+    #print(TukeyHSD(mod, "age"))
+}
+
+# table = alpha_dfs[[6]]
+# mod = aov(Diversity ~ gender * ethnicity * age, data=table)
+# TukeyHSD(mod, "ethnicity")
+```
+
+```{R}
+metrics = c('chao1','faith_pd','observed_otus','shannon','simpson','simpson_e')
+
+for (i in 1:length(metrics)) {
+    # table = alpha_dfs[[i]]
+    table = read.csv(paste(py$folder, "intermediate/", metrics[i], "_diet_ses_physical_mental.csv", sep=""))
+    table$dsq2 = as.character(table$dsq2)
+    table$dsq4 = as.character(table$dsq4)
+    table$dsq5 = as.character(table$dsq5)
+    table$dsq6 = as.character(table$dsq6)
+    table$dsq7 = as.character(table$dsq7)
+    table$dsq8 = as.character(table$dsq8)
+    table$dsq9 = as.character(table$dsq9)
+    table$dsq10 = as.character(table$dsq10)
+    table$dsq11 = as.character(table$dsq11)
+    table$dsq12 = as.character(table$dsq12)
+    table$dsq13 = as.character(table$dsq13)
+    table$dsq14 = as.character(table$dsq14)
+    table$dsq15 = as.character(table$dsq15)
+    table$dsq16 = as.character(table$dsq16)
+    table$dsq17 = as.character(table$dsq17)
+    table$dsq18 = as.character(table$dsq18)
+    table$dsq19 = as.character(table$dsq19)
+    table$dsq20 = as.character(table$dsq20)
+    table$dsq21 = as.character(table$dsq21)
+    table$dsq22 = as.character(table$dsq22)
+    table$dsq23 = as.character(table$dsq23)
+    print(metrics[i])
+    mod = aov(Diversity ~ gender + ethnicity + age + HEFI + cur_msd_soc + cur_msd_mat + antibiotics + physical_mental_condition + strict_diet + dsq2 + dsq4 + dsq5 + dsq6 + dsq7 + dsq8 + dsq9 + dsq10 + dsq11 + dsq12 + dsq13 + dsq14 + dsq15 + dsq16 + dsq17 + dsq18 + dsq19 + dsq20 + dsq21 + dsq22 + dsq23, data=table)
+    print(summary(mod))
+    capture.output(summary(mod),file=paste(py$folder, "files/alpha_stats/", metrics[i], "_diet_added.csv", sep="")) 
+    # mod = aov(Diversity ~ gender * ethnicity * age * HEFI * cur_msd_soc * cur_msd_mat * antibiotics * physical_mental_condition, data=table)
+    # print(summary(mod))
+    # capture.output(summary(mod),file=paste(py$folder, "files/alpha_stats/", metrics[i], "_all_vars_interaction.csv", sep="")) 
+    #these outputs have to be manually modified
+    print('\n\n\n')
+    #print(TukeyHSD(mod, "ethnicity"))
+    #print(TukeyHSD(mod, "age"))
+}
+```
+
+### Plotting
+
+#### Plot gender
+
+```{python}
+metrics = ['faith_pd','simpson_e','simpson']
+names = ["Faith's phylogenetic diversity", "Simpson's evenness", "Simpson's index of diversity"]
+md = pd.read_csv(folder+'files/metadata_microbiome_only.csv', index_col=0, header=0)
+md = md[md['gender'].notnull()]
+md = md[md['ethnicity'].isin(['South Asian', 'East Asian', 'White'])]
+
+fig = plt.figure(figsize=(10,3))
+axes = [plt.subplot(131), plt.subplot(132), plt.subplot(133)]
+
+for m in range(len(metrics)):
+  metric = metrics[m]
+  plt.sca(axes[m])
+  #if metric != 'simpson': continue
+  alpha = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_'+metric+'.csv', index_col=0, header=0).loc[:, ['Mean']].rename(columns={'Mean':'Diversity'})
+  alpha = alpha.loc[md.index.values, :]
+  males = md[md['gender'] == 'Male']
+  females = md[md['gender'] == 'Female']
+  alpha_males = alpha.loc[males.index.values, 'Diversity'].values
+  alpha_females = alpha.loc[females.index.values, 'Diversity'].values
+  groups_plotting = [alpha_males, alpha_females]
+  color_plot = [colors_gender['Male'], colors_gender['Female']]
+  x = [0, 1]
+  box = axes[m].boxplot(groups_plotting, positions=x, patch_artist=True, vert=True, showfliers=False, widths=0.3)
+  for item in ['whiskers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  for patch, color in zip(box['boxes'], color_plot):
+    patch.set_facecolor(color)
+    patch.set_alpha(0.4)
+  vp = axes[m].violinplot(groups_plotting, points=500, positions=x, showmeans=False, showextrema=False, showmedians=False, vert=True, side='low', widths=0.6)
+  for idx, b in enumerate(vp['bodies']):
+    b.set_color(color_plot[idx])
+    b.set_alpha(0.4)
+  xvals = x
+  for idx, features in enumerate(groups_plotting):
+    yv = np.full(len(features), xvals[idx] + .3)
+    idxs = np.arange(len(yv))
+    out = yv.astype(float)
+    out.flat[idxs] += np.random.uniform(low=-.12, high=.08, size=len(idxs))
+    yv = out
+    sc = axes[m].scatter(yv, features, s=.3, c=color_plot[idx], alpha=0.2)
+    median = np.median(features)
+    tx = axes[m].text(xvals[idx]-0.25, median, str(round(median, 4)), ha='center', va='center', rotation=90)
+  xt = plt.xticks([0, 1], ['Male', 'Female'])
+  ti = plt.title(names[m], fontweight='bold')
+  if m == 0: yl = plt.ylabel('Diversity')
+
+#plt.show()
+plt.savefig(folder+'figures/alpha_gender.png', dpi=600, bbox_inches='tight')
+
+```
+
+#### Plot ethnicity
+
+```{python}
+metrics = ['faith_pd','simpson_e','simpson']
+names = ["Faith's phylogenetic diversity", "Simpson's evenness", "Simpson's index of diversity"]
+md = pd.read_csv(folder+'files/metadata_microbiome_only.csv', index_col=0, header=0)
+md = md[md['gender'].notnull()]
+md = md[md['ethnicity'].isin(['South Asian', 'East Asian', 'White'])]
+
+fig = plt.figure(figsize=(10,3))
+axes = [plt.subplot(131), plt.subplot(132), plt.subplot(133)]
+
+for m in range(len(metrics)):
+  metric = metrics[m]
+  plt.sca(axes[m])
+  #if metric != 'simpson': continue
+  alpha = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_'+metric+'.csv', index_col=0, header=0).loc[:, ['Mean']].rename(columns={'Mean':'Diversity'})
+  alpha = alpha.loc[md.index.values, :]
+  s_asian = md[md['ethnicity'] == 'South Asian']
+  e_asian = md[md['ethnicity'] == 'East Asian']
+  white = md[md['ethnicity'] == 'White']
+  alpha_s_asian = alpha.loc[s_asian.index.values, 'Diversity'].values
+  alpha_e_asian = alpha.loc[e_asian.index.values, 'Diversity'].values
+  alpha_white = alpha.loc[white.index.values, 'Diversity'].values
+  groups_plotting = [alpha_e_asian, alpha_s_asian, alpha_white]
+  color_plot = [colors_ethnicity['East Asian'], colors_ethnicity['South Asian'], colors_ethnicity['White']]
+  x = [0, 1, 2]
+  box = axes[m].boxplot(groups_plotting, positions=x, patch_artist=True, vert=True, showfliers=False, widths=0.3)
+  for item in ['whiskers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  for patch, color in zip(box['boxes'], color_plot):
+    patch.set_facecolor(color)
+    patch.set_alpha(0.4)
+  vp = axes[m].violinplot(groups_plotting, points=500, positions=x, showmeans=False, showextrema=False, showmedians=False, vert=True, side='low', widths=0.6)
+  for idx, b in enumerate(vp['bodies']):
+    b.set_color(color_plot[idx])
+    b.set_alpha(0.4)
+  xvals = x
+  for idx, features in enumerate(groups_plotting):
+    yv = np.full(len(features), xvals[idx] + .3)
+    idxs = np.arange(len(yv))
+    out = yv.astype(float)
+    out.flat[idxs] += np.random.uniform(low=-.12, high=.08, size=len(idxs))
+    yv = out
+    sc = axes[m].scatter(yv, features, s=.3, c=color_plot[idx], alpha=0.2)
+    median = np.median(features)
+    tx = axes[m].text(xvals[idx]-0.25, median, str(round(median, 4)), ha='center', va='center', rotation=90)
+  xt = plt.xticks([0, 1, 2], ['East\nAsian', 'South\nAsian', 'White'])
+  ti = plt.title(names[m], fontweight='bold')
+  if m == 0: yl = plt.ylabel('Diversity')
+
+#plt.show()
+plt.savefig(folder+'figures/alpha_ethnicity.png', dpi=600, bbox_inches='tight')
+
+```
+
+#### Plot age
+
+```{python}
+metrics = ['faith_pd','simpson_e','simpson']
+names = ["Faith's phylogenetic diversity", "Simpson's evenness", "Simpson's index of diversity"]
+md = pd.read_csv(folder+'files/metadata_microbiome_only.csv', index_col=0, header=0)
+md = md[md['gender'].notnull()]
+md = md[md['ethnicity'].isin(['South Asian', 'East Asian', 'White'])]
+
+fig = plt.figure(figsize=(10,3))
+axes = [plt.subplot(131), plt.subplot(132), plt.subplot(133)]
+
+for m in range(len(metrics)):
+  metric = metrics[m]
+  plt.sca(axes[m])
+  #if metric != 'simpson': continue
+  alpha = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_'+metric+'.csv', index_col=0, header=0).loc[:, ['Mean']].rename(columns={'Mean':'Diversity'})
+  alpha_vals = alpha.loc[md.index.values, 'Diversity'].values
+  age_vals = md.loc[:, 'age'].values
+  sc = axes[m].scatter(age_vals, alpha_vals, marker='o', color='k', alpha=0.2)
+  theta = np.polyfit(age_vals, alpha_vals, 1)
+  y_line = theta[1] + theta[0] * np.array([a for a in range(int(min(age_vals)), int(max(age_vals)))])
+  li = axes[m].plot([a for a in range(int(min(age_vals)), int(max(age_vals)))], y_line, 'r--')
+  corr, p = spearmanr(age_vals, alpha_vals)
+  string = "Spearman's: R="+str(round(corr,3))+', $p$='+str(round(p,3))+'\n'
+  corr, p = pearsonr(age_vals, alpha_vals)
+  string += "Pearson's: R="+str(round(corr,3))+', $p$='+str(round(p,3))
+  if m in [0, 1]: st = plt.text(0.5, 0.95, string, ha='center', va='top', transform=axes[m].transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7), fontsize=8)
+  else: st = plt.text(0.5, 0.05, string, ha='center', va='bottom', transform=axes[m].transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7), fontsize=8)
+  
+  ti = plt.title(names[m], fontweight='bold')
+  if m == 0: yl = plt.ylabel('Diversity')
+  xt = plt.xlabel('Age')
+
+#plt.show()
+plt.savefig(folder+'figures/alpha_age.png', dpi=600, bbox_inches='tight')
+
+```
+
+#### Each trajectory for main variables
+
+```{python}
+metrics = ['faith_pd', 'chao1', 'observed_otus', 'simpson_e', 'shannon', 'simpson']
+metrics_rename = ["Faith's PD", 'Chao1 richness', 'Observed ASVs', "Simpson's evenness", "Shannon diversity", "Simpson's diversity"]
+grouping = [ ['gender', 'Female', colors_gender['Female']], ['gender', 'Male', colors_gender['Male']],['ethnicity', 'East Asian', colors_ethnicity['East Asian']], ['ethnicity', 'South Asian', colors_ethnicity['South Asian']], ['ethnicity', 'White', colors_ethnicity['White']]]
+md =  pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv', index_col=0, header=0)
+
+fig = plt.figure(figsize=(25,19))
+
+ylims = {}
+plots = {}
+for metric in metrics:
+  ylims[metric] = []
+  plots[metric] = []
+
+for g in range(len(grouping)):
+  ax_density = plt.subplot2grid((21,5),(18,g))
+  plt.sca(ax_density)
+  group = md[md[grouping[g][0]] == grouping[g][1]]
+  unique_ages = sorted(list(set([round(a, 1) for a in group['age'].values])))
+  counts = []
+  for a in range(len(unique_ages)):
+    cnt = (ages.count(unique_ages[a])/md.shape[0])
+    counts.append(cnt)
+  w = lowess(counts, unique_ages, frac=0.25, return_sorted=False)
+  age_dict = {}
+  for c in range(len(unique_ages)):
+    age_dict[unique_ages[c]] = w[c]
+  li = ax_density.plot(unique_ages, w, 'k-')
+  li = ax_density.fill_between(unique_ages, [0 for c in range(len(w))], w, color='k', alpha=0.3)
+  med_age, quants = np.median(list(group['age'].values)), np.quantile(list(group['age'].values), [0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99])
+  print(med_age, quants)
+  #quants = [quants[0], quants[1], quants[2], med_age, quants[3], quants[4], quants[5]]
+  #quants = [med_age]
+  xticks = [min(group['age'].values), med_age, max(group['age'].values)]
+  for q in quants:
+    pl = ax_density.plot([q, q], [0, age_dict[round(q, 1)]], color=grouping[g][2], linestyle='--')
+    #if q != med_age: tx = ax_density.text(q, age_dict[round(q, 1)]/2, str(round(q, 1)), ha='center', va='center', color='k', bbox=dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.3, edgecolor=grouping[g][2]), fontsize=8)
+  xt = plt.xticks(xticks), plt.xlim([xticks[0], xticks[-1]]), plt.xlabel('Age (years)')
+  if g != 0: yt = plt.yticks([])
+  else: yl = plt.ylabel('Proportion')
+  for m in range(len(metrics)):
+    #if m > 0: continue
+    alpha = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_'+metrics[m]+'.csv', index_col=0, header=0)
+    ax = plt.subplot2grid((7,5),(m,g))
+    plt.sca(ax)
+    if g == 0: ti = plt.ylabel(metrics_rename[m], fontweight='bold')
+    if m == 0: 
+      yl = plt.title(grouping[g][1]+'\n', fontweight='bold')
+      yl = plt.text(0.5, 1.05, '($n$='+str(group.shape[0])+')', ha='center', va='bottom', transform=ax.transAxes)
+    vals_group_alpha = {}
+    for age in unique_ages:
+      vals_group_alpha[age] = []
+    age_scatter, alp_scatter = [], []
+    for row in group.index.values:
+      age = round(group.loc[row, 'age'], 1)
+      try:
+        alp = alpha.loc[row, 'Mean']
+        vals_group_alpha[age].append(alp)
+      except:
+        continue
+      age_scatter.append(group.loc[row, 'age'])
+      alp_scatter.append(alp)
+    sc = ax.scatter(age_scatter, alp_scatter, marker='o', alpha=0.1, color='gray')
+    means, upper, lower, median, upper_quant, lower_quant = [], [], [], [], [], []
+    for age in unique_ages:
+      mean, std, med, uq, lq = np.mean(vals_group_alpha[age]), np.std(vals_group_alpha[age]), np.median(vals_group_alpha[age]), np.quantile(vals_group_alpha[age], 0.75), np.quantile(vals_group_alpha[age], 0.25)
+      ap = means.append(mean), upper.append(mean+std), lower.append(mean-std), median.append(med), upper_quant.append(uq), lower_quant.append(lq)
+    w = lowess(means, unique_ages, frac=0.35, return_sorted=False)
+    w_up = lowess(upper, unique_ages, frac=0.35, return_sorted=False)
+    w_low = lowess(lower, unique_ages, frac=0.35, return_sorted=False)
+    # w = lowess(means, unique_ages, frac=0.2, return_sorted=False)
+    # w_up = lowess(upper, unique_ages, frac=0.2, return_sorted=False)
+    # w_low = lowess(lower, unique_ages, frac=0.2, return_sorted=False)
+    # w = lowess(median, unique_ages, frac=0.35, return_sorted=False)
+    # w_up = lowess(upper_quant, unique_ages, frac=0.35, return_sorted=False)
+    # w_low = lowess(lower_quant, unique_ages, frac=0.35, return_sorted=False)
+    li = ax.plot(unique_ages, w, color=grouping[g][2], linestyle='-')
+    li = ax.fill_between(unique_ages, w_up, w_low, color=grouping[g][2], alpha=0.3)
+    # li = ax.plot(unique_ages, means, color=grouping[g][2], linestyle='-')
+    # li = ax.fill_between(unique_ages, upper, lower, color=grouping[g][2], alpha=0.3)
+    xt = plt.xticks([]), plt.xlim([xticks[0], xticks[-1]])
+    ap = ylims[metrics[m]].append(plt.ylim()), plots[metrics[m]].append(ax)
+    #if g != 0: yt = plt.yticks([])
+    #else: yl = plt.ylabel('Proportion')
+
+metrics_limit = {'faith_pd':[17, 20], 'chao1':[90, 130], 'observed_otus':[60, 100], 'simpson_e':[0.11, 0.16], 'shannon':[3.8, 4.8], 'simpson':[0.86, 0.92]}
+
+for metric in metrics:
+  all_ylim = ylims[metric]
+  min_y, max_y = 100, 0
+  for lims in all_ylim:
+    if lims[0] < min_y: min_y = lims[0]
+    if lims[1] > max_y: max_y = lims[1]
+  for ax in plots[metric]:
+    plt.sca(ax)
+    yl = plt.ylim([min_y, max_y])
+    #yl = plt.ylim(metrics_limit[metric])
+
+#plt.show()
+plt.savefig(folder+'figures/alpha_summary.png', bbox_inches='tight', dpi=600)
+```
+
+#### Plot significant variables
+
+```{python}
+metrics = ['faith_pd', 'chao1', 'observed_otus', 'simpson_e', 'shannon', 'simpson']
+metrics_rename = ["Faith's PD", 'Chao1 richness', 'Observed ASVs', "Simpson's\nevenness", "Shannon\ndiversity", "Simpson's\ndiversity"]
+md =  pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv', index_col=0, header=0)
+
+variables = ['ethnicity', 'age', 'antibiotics', 'cur_msd_soc']
+variable_names = ['Ethnicity', 'Age', 'Antibiotics', 'Social deprivation']
+colors = [colors_ethnicity, '', colors_antibiotics, '']
+
+fig = plt.figure(figsize=(12,12))
+rowspan = [3, 5, 2, 5]
+
+for m in range(len(metrics)):
+  #if m > 0: continue
+  start = 0
+  alpha = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_'+metrics[m]+'.csv', index_col=0, header=0)
+  metric_ax = []
+  for v in range(len(variables)):
+    md_red = md[md[variables[v]].notnull()]
+    ax = plt.subplot2grid((15,6),(start,m), rowspan=rowspan[v])
+    metric_ax.append(ax)
+    plt.sca(ax)
+    if v == 0: ti = plt.title(metrics_rename[m], fontweight='bold')
+    start += rowspan[v]
+    if m == 0:
+      if v in [1, 3]: yl = plt.ylabel(variable_names[v]+'\n($n$='+str(md_red.shape[0])+')', fontweight='bold')
+      else: yl = plt.ylabel(variable_names[v], fontweight='bold')
+    if variables[v] in ['ethnicity', 'antibiotics']:
+      groups = set(md_red[variables[v]].values)
+      count = 0
+      yvals, ylabs = [], []
+      for group in groups:
+        this_group = md_red[md_red[variables[v]] == group]
+        this_group_alpha = alpha.loc[[m for m in this_group.index.values if m in alpha.index.values], 'Mean']
+        sc = ax.scatter(this_group_alpha, np.random.normal(count, scale=0.08, size=len(this_group_alpha)), alpha=0.1, color=colors[v][group], s=5)
+        box = ax.boxplot([this_group_alpha], positions=[count], widths=0.6, showfliers=False, vert=False)
+        for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+        ap = yvals.append(count), ylabs.append(group+'\n($n$='+str(len(list(this_group_alpha)))+')')
+        count += 1
+      if m == 0: ti = plt.yticks(yvals, ylabs)
+      else: plt.yticks([])
+    else:
+      group_vals = md_red.loc[[m for m in md_red.index.values if m in alpha.index.values], :]
+      alpha_red = alpha.loc[group_vals.index.values, 'Mean'].values
+      sc = plt.scatter(alpha_red, group_vals[variables[v]].values, s=5, color='gray', alpha=0.1)
+      var = group_vals[variables[v]].values
+      rng = max(var)-min(var)
+      interval = rng/150
+      start_mean = min(var)
+      mean_var, mean_alpha, upper_alpha, lower_alpha = [], [], [], []
+      for a in range(150):
+        vars_range = [i for i in var if start_mean <= i <= start_mean+interval]
+        range_samples = group_vals[group_vals[variables[v]].isin(vars_range)]
+        if range_samples.shape[0] == 0: 
+          start_mean += interval
+          continue
+        range_var = np.mean([start_mean, start_mean+interval])
+        range_vals = alpha.loc[range_samples.index.values, 'Mean'].values
+        range_alpha_mean, range_alpha_std = np.mean(range_vals), np.std(range_vals)
+        ap = mean_var.append(range_var), mean_alpha.append(range_alpha_mean), upper_alpha.append(range_alpha_mean+range_alpha_std), lower_alpha.append(range_alpha_mean-range_alpha_std)
+        start_mean += interval
+      w = lowess(mean_alpha, mean_var, frac=0.35)
+      w_var, w_alp = [y[0] for y in w], [y[1] for y in w]
+      w_up = lowess(upper_alpha, mean_var, frac=0.35)
+      w_var_up, w_alp_up = [y[0] for y in w_up], [y[1] for y in w_up]
+      w_low = lowess(lower_alpha, mean_var, frac=0.35)
+      w_var_low, w_alp_low = [y[0] for y in w_low], [y[1] for y in w_low]
+      pl = plt.plot(w_alp, mean_var, color='red', linestyle='-')
+      fb = plt.fill_betweenx(mean_var, w_alp_low, w_alp_up, color='red', alpha=0.3)
+      if m != 0: plt.yticks([])
+  min_x, max_x = 100, 0
+  for ax in metric_ax:
+    plt.sca(ax)
+    xlim = plt.xlim()
+    if xlim[0] < min_x: min_x = xlim[0]
+    if xlim[1] > max_x: max_x = xlim[1]
+  count = 0
+  for ax in metric_ax:
+    plt.sca(ax)
+    xl = plt.xlim([min_x, max_x])
+    if count < 3: xt = plt.xticks([])
+    else: xt = plt.xlabel(metrics_rename[m])
+    count += 1
+      
+
+plt.savefig(folder+'figures/alpha_significant_variables.png', bbox_inches='tight', dpi=600)
+    
+```
+
+#### Plot significant diet variables
+
+```{python}
+metrics = ['faith_pd', 'chao1', 'observed_otus', 'simpson_e', 'shannon', 'simpson']
+metrics_rename = ["Faith's PD", 'Chao1 richness', 'Observed ASVs', "Simpson's\nevenness", "Shannon\ndiversity", "Simpson's\ndiversity"]
+md =  pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv', index_col=0, header=0)
+
+variables = ['dsq2', 'dsq13', 'dsq16', 'dsq17', 'dsq19', 'dsq22']
+variable_names = ['Q2: probiotics/\nprebiotics/\nsupplements', 'Q13: fruit', 'Q16: red meat', 'Q17: processed\nmeat', 'Q19: fish/\nseafood', 'Q22: desserts/\nsweets']
+colors = ['gray', '#9b59b6', '#2980b9', '#1abc9c', '#27ae60', '#f1c40f', '#e67e22', '#c0392b', '#ec0cca']
+group_names = ['Never', 'Once per month', '2-3 times per month', 'Once per week', 'Twice per week', '3-4 times per week', '5-6 times per week', 'Once per day', '>2 times per day']
+
+fig = plt.figure(figsize=(12,12))
+rowspan = [3, 3, 3, 3, 3, 3]
+
+for m in range(len(metrics)):
+  #if m > 0: continue
+  start = 0
+  alpha = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_'+metrics[m]+'.csv', index_col=0, header=0)
+  metric_ax = []
+  for v in range(len(variables)):
+    md_red = md[md[variables[v]].notnull()]
+    ax = plt.subplot2grid((18,6),(start,m), rowspan=rowspan[v])
+    metric_ax.append(ax)
+    plt.sca(ax)
+    if v == 0: ti = plt.title(metrics_rename[m], fontweight='bold')
+    start += rowspan[v]
+    if m == 0:
+      yl = plt.ylabel(variable_names[v], fontweight='bold')
+    groups = sorted(list(set(md_red[variables[v]].values)))
+    count = 0
+    yvals, ylabs, xvals = [], [], []
+    for group in groups:
+        this_group = md_red[md_red[variables[v]] == group]
+        this_group_alpha = alpha.loc[[m for m in this_group.index.values if m in alpha.index.values], 'Mean']
+        sc = ax.scatter(this_group_alpha, np.random.normal(count, scale=0.08, size=len(this_group_alpha)), alpha=0.1, color='gray', s=5)
+        ap = xvals.append(np.mean(this_group_alpha))
+        #box = ax.boxplot([this_group_alpha], positions=[count], widths=0.6, showfliers=False, vert=False)
+        #for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+        ap = yvals.append(count), ylabs.append(group_names[int(group)]+' ($n$='+str(len(list(this_group_alpha)))+')')
+        count += 1
+    w = lowess(xvals, yvals, frac=0.25)
+    w_var, w_alp = [y[0] for y in w], [y[1] for y in w]
+    pl = plt.plot(w_alp, yvals, color='red', linestyle='-')
+    if m == 0: ti = plt.yticks(yvals, ylabs)
+    else: plt.yticks([])
+  min_x, max_x = 100, 0
+  for ax in metric_ax:
+    plt.sca(ax)
+    xlim = plt.xlim()
+    if xlim[0] < min_x: min_x = xlim[0]
+    if xlim[1] > max_x: max_x = xlim[1]
+  count = 0
+  for ax in metric_ax:
+    plt.sca(ax)
+    xl = plt.xlim([min_x, max_x])
+    if count < 5: xt = plt.xticks([])
+    else: xt = plt.xlabel(metrics_rename[m])
+    count += 1
+
+
+plt.savefig(folder+'figures/alpha_dsq_significant_variables_trend.png', bbox_inches='tight', dpi=600)
+    
+```
+
+## Split by age group
+
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses.csv', index_col=0, header=0)
+# md = md[md['gender'].notnull()]
+# md = md[md['HEFI'].notnull()]
+# md = md[md['cur_msd_soc'].notnull()]
+# md = md[md['cur_msd_mat'].notnull()]
+# md = md[md['ethnicity'].isin(['South Asian', 'East Asian', 'White'])]
+
+# print(md)
+# print(min(md['cur_msd_mat'].values))
+# print(max(md['cur_msd_mat'].values))
+# print(np.mean(md['cur_msd_mat'].values))
+
+md_young = md[md['age'] < 8]
+md_middle = md[md['age'] >= 8]
+md_middle = md_middle[md_middle['age'] < 12]
+md_old = md[md['age'] >= 12]
+
+print(md_young, md_middle, md_old)
+
+# md = md.sort_values(by=['age'], ascending=True)
+# md_young = md.iloc[:1592, :]
+# md_middle = md.iloc[1592:3184, :]
+# md_old = md.iloc[3184:, :]
+# 
+# md_age = [md, md_young, md_middle, md_old]
+# for mage in md_age:
+#   ages = print('Age group: ', round(np.mean(mage['age'].values), 2), min(mage['age'].values), max(mage['age'].values))
+#   gender = list(mage.loc[:, 'gender'].values)
+#   print('Males: n =', gender.count('Male'), ', females: n =', gender.count('Female'))
+#   print('Percent females: ', (gender.count('Female')/(mage.shape[0]))*100)
+#   print('Percent Males: ', (gender.count('Male')/(mage.shape[0]))*100)
+#   ethnicities = set(mage.loc[:, 'ethnicity'].values)
+#   for ethnicity in ethnicities:
+#     md_ethnicity = mage[mage['ethnicity'] == ethnicity]
+#     gender_ethnicity = list(md_ethnicity.loc[:, 'gender'].values)
+#     print(ethnicity, ': n = ', md_ethnicity.shape[0], ', percent females: ', (gender_ethnicity.count('Female')/(gender_ethnicity.count('Male')+gender_ethnicity.count('Female')))*100)
+#   mage_hefi = mage[mage['HEFI'].notnull()]
+#   print('HEFI: ', mage_hefi.shape[0], np.mean(mage_hefi['HEFI'].values), min(mage_hefi['HEFI'].values), max(mage_hefi['HEFI'].values))
+#   mage_soc = mage[mage['cur_msd_soc'].notnull()]
+#   print('cur_msd_soc: ', mage_soc.shape[0], np.mean(mage_soc['cur_msd_soc'].values), min(mage_soc['cur_msd_soc'].values), max(mage_soc['cur_msd_soc'].values))
+#   mage_mat = mage[mage['cur_msd_mat'].notnull()]
+#   print('cur_msd_mat: ', mage_mat.shape[0], np.mean(mage_mat['cur_msd_mat'].values), min(mage_mat['cur_msd_mat'].values), max(mage_mat['cur_msd_mat'].values))
+
+```
+
+## Save stats for beta diversity testing
+
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental.csv', index_col=0, header=0)
+md = md[md['gender'].notnull()]
+md = md[md['ethnicity'].isin(['South Asian', 'East Asian', 'White'])]
+md.to_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv')
+```
+
+Vulcan:
+```{R, eval=FALSE}
+#conda activate r-phyloseq
+#cd SickKids_SfS/processing
+#scp files/metadata_microbiome_only_plus_diet_ses_no_null.csv vulcan:/home/robyn/SickKids_SfS/processing/
+#phylo_rpca/distance-matrix.tsv
+library(vegan)
+
+dm = read.csv("phylo_rpca/distance-matrix.tsv", sep='\t')
+dm_df = as.data.frame(dm)
+rownames(dm_df) = dm_df[,1]
+dm_df = dm_df[,2:4846]
+md = read.csv('metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv')
+rownames(md) = md[,1]
+
+new_list <- c()
+for (i in 1:length(rownames(md))) {
+  if (rownames(md)[i] %in% rownames(dm_df)) {
+    new_list = c(rownames(md)[i], new_list)
+  }
+}
+
+dm_df = dm_df[new_list, new_list]
+md = md[new_list,]
+#class(md$dsq2)
+
+#dsqs = c("dsq2", "dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq9", "dsq10", "dsq11", "dsq12", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23")
+
+md$dsq2 = as.character(md$dsq2)
+md$dsq4 = as.character(md$dsq4)
+md$dsq5 = as.character(md$dsq5)
+md$dsq6 = as.character(md$dsq6)
+md$dsq7 = as.character(md$dsq7)
+md$dsq8 = as.character(md$dsq8)
+md$dsq9 = as.character(md$dsq9)
+md$dsq10 = as.character(md$dsq10)
+md$dsq11 = as.character(md$dsq11)
+md$dsq12 = as.character(md$dsq12)
+md$dsq13 = as.character(md$dsq13)
+md$dsq14 = as.character(md$dsq14)
+md$dsq15 = as.character(md$dsq15)
+md$dsq16 = as.character(md$dsq16)
+md$dsq17 = as.character(md$dsq17)
+md$dsq18 = as.character(md$dsq18)
+md$dsq19 = as.character(md$dsq19)
+md$dsq20 = as.character(md$dsq20)
+md$dsq21 = as.character(md$dsq21)
+md$dsq22 = as.character(md$dsq22)
+md$dsq23 = as.character(md$dsq23)
+
+#comparisons with all participants
+permanova <- adonis2(dm_df ~ md$gender + md$age + md$ethnicity + md$physical_mental_condition, data=dm_df)
+write.csv(permanova, 'permanova_basic_vars_all_participants_added.csv')
+
+permanova2 <- adonis2(dm_df ~ md$gender * md$age * md$ethnicity * md$physical_mental_condition, data=dm_df)
+write.csv(permanova2, 'permanova_basic_vars_all_participants_interaction.csv')
+
+permanova3 <- adonis2(dm_df ~ md$gender + md$age + md$ethnicity + md$HEFI + md$cur_msd_mat + md$cur_msd_soc + md$antibiotics + md$physical_mental_condition, data=dm_df, na.action=na.exclude)
+write.csv(permanova3, 'permanova_all_vars_added.csv')
+
+permanova4 <- adonis2(dm_df ~ md$gender * md$age * md$ethnicity * md$HEFI * md$cur_msd_mat * md$cur_msd_soc * md$antibiotics * md$physical_mental_condition, data=dm_df, na.action=na.exclude)
+write.csv(permanova4, 'permanova_all_vars_interaction.csv')
+
+permanova5 <- adonis2(dm_df ~ md$gender + md$age + md$ethnicity + md$HEFI + md$cur_msd_mat + md$cur_msd_soc + md$antibiotics + md$physical_mental_condition + md$strict_diet + md$dsq2 + md$dsq4 + md$dsq5 + md$dsq6 + md$dsq7 + md$dsq8 + md$dsq9 + md$dsq10 + md$dsq11 + md$dsq12 + md$dsq13 + md$dsq14 + md$dsq15 + md$dsq16 + md$dsq17 + md$dsq18 + md$dsq19 + md$dsq20 + md$dsq21 + md$dsq22 + md$dsq23, data=dm_df, na.action=na.exclude)
+write.csv(permanova5, 'permanova_diet_added.csv')
+
+permanova6 <- adonis2(dm_df ~ md$gender * md$age * md$ethnicity * md$HEFI * md$cur_msd_mat * md$cur_msd_soc * md$antibiotics * md$physical_mental_condition * md$strict_diet * md$dsq2 * md$dsq4 * md$dsq5 * md$dsq6 * md$dsq7 * md$dsq8 * md$dsq9 * md$dsq10 * md$dsq11 * md$dsq12 * md$dsq13 * md$dsq14 * md$dsq15 * md$dsq16 * md$dsq17 * md$dsq18 * md$dsq19 * md$dsq20 * md$dsq21 * md$dsq22 * md$dsq23, data=dm_df, na.action=na.exclude)
+write.csv(permanova6, 'permanova_diet_interaction.csv')
+
+# permanova3 <- adonis2(dm_df_red ~ md_red$gender + md_red$age + md_red$ethnicity + md_red$HEFI + md_red$cur_msd_mat + md_red$cur_msd_soc + md_red$antibiotics + md_red$physical_mental_condition, data=dm_df_red, na.action=na.exclude)
+# table = permanova$aov.tab
+# write.csv(table, 'basic_vars_added.csv')
+
+# permanova <- adonis(dm_df ~ md$gender * md$age * md$ethnicity, data=dm_df)
+# table = permanova$aov.tab
+# write.csv(table, 'permanova_gender_age_ethnicity.csv')
+# 
+# permanova2 <- adonis(dm_df ~ md$gender + md$age + md$ethnicity, data=dm_df)
+# table2 = permanova2$aov.tab
+# write.csv(table2, 'permanova_gender_age_ethnicity_added.csv')
+# 
+# library(tidyr)
+# md_red = md %>% drop_na(HEFI, cur_msd_mat, cur_msd_soc)
+# dm_df_red = dm_df[rownames(md_red), rownames(md_red)]
+# 
+# permanova3 <- adonis(dm_df_red ~ md_red$gender + md_red$age + md_red$ethnicity + md_red$HEFI + md_red$cur_msd_mat + md_red$cur_msd_soc, data=dm_df_red)
+# table3 = permanova3$aov.tab
+# write.csv(table3, 'permanova_six_vars_added.csv')
+# 
+# permanova4 <- adonis(dm_df_red ~ md_red$gender * md_red$age * md_red$ethnicity * md_red$HEFI * md_red$cur_msd_mat * md_red$cur_msd_soc, data=dm_df_red)
+# table4 = permanova4$aov.tab
+# write.csv(table4, 'permanova_six_vars.csv')
+# 
+# md_red = md %>% drop_na(HEFI)
+# dm_df_red = dm_df[rownames(md_red), rownames(md_red)]
+# permanova5 <- adonis(dm_df_red ~ md_red$HEFI, data=dm_df_red)
+# table5 = permanova5$aov.tab
+# write.csv(table5, 'permanova_HEFI.csv')
+# 
+# 
+# md_red = md %>% drop_na(dsq1, dsq2, dsq3, dsq4, dsq5, dsq6, dsq7, dsq8, dsq9, dsq10, dsq11, dsq12, dsq13, dsq14, dsq15, dsq16, dsq17, dsq18, dsq19, dsq20, dsq21, dsq22, dsq23)
+# dm_df_red = dm_df[rownames(md_red), rownames(md_red)]
+# permanova6 <- adonis(dm_df_red ~ md_red$dsq1 + md_red$dsq2 + md_red$dsq3 + md_red$dsq4 + md_red$dsq5 + md_red$dsq6 + md_red$dsq7 + md_red$dsq8 + md_red$dsq9 + md_red$dsq10 + md_red$dsq11 + md_red$dsq12 + md_red$dsq13 + md_red$dsq14 + md_red$dsq15 + md_red$dsq16 + md_red$dsq17 + md_red$dsq18 + md_red$dsq19 + md_red$dsq20 + md_red$dsq21 + md_red$dsq22 + md_red$dsq23, data=dm_df_red)
+# table6 = permanova6$aov.tab
+# write.csv(table6, 'permanova_diet_qs.csv')
+# 
+# 
+# anosim <- anosim(mat_df, md$gender*md$age_at_enrollment, permutations=999)
+#   anosim_age <- anosim(mat_df, md$age_at_enrollment, permutations=999)
+#   anosim_gender <- anosim(mat_df, md$gender, permutations=999)
+#   anosim_results = c(anosim$statistic, anosim$signif)
+#   anosim_results_age = c(anosim_age$statistic, anosim_age$signif)
+#   anosim_results_gender = c(anosim_gender$statistic, anosim_gender$signif)
+#   anosim_all = matrix(c(anosim_results, anosim_results_age, anosim_results_gender), ncol = 2, dimnames = list(c('Age x gender', 'Age', 'Gender'), c('Statistic', 'Significance')))
+#   write.csv(anosim_all, paste(py$folder, 'diversity/anosim_', names[a], '.csv', sep=''))
+# }
+```
+
+## Plot PCoA
+
+For each of the metadata groups, make PCoA plots:
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv', index_col=0, header=0)
+#dist = pd.read_csv(folder+'QIIME2/processing/phylo_rpca/distance-matrix.tsv', index_col=0, header=0, sep='\t')
+pca = pd.read_csv(folder+'QIIME2/processing/phylo_rpca/ordination_pca.csv', index_col=0, header=0)
+metrics = ['gender', 'age', 'ethnicity', 'HEFI', 'cur_msd_mat', 'cur_msd_soc', 'antibiotics', 'physical_mental_condition']
+permanova = pd.read_csv(folder+'QIIME2/processing/permanova_all_vars_interaction.csv', index_col=0, header=0)
+
+prop_explain = [0.6386125734929017, 0.3023029246310683, 0.05908450187603021]
+
+md = md.sort_values(by=['age'], ascending=True)
+md_young = md.iloc[:1592, :]
+md_middle = md.iloc[1592:3184, :]
+md_old = md.iloc[3184:, :]
+
+md = pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv', index_col=0, header=0)
+
+md['age_group'] = ''
+for row in md.index.values:
+  if row in md_young.index.values:
+    md.loc[row, 'age_group'] = 'Young'
+  elif row in md_middle.index.values:
+    md.loc[row, 'age_group'] = 'Middle'
+  elif row in md_old.index.values:
+    md.loc[row, 'age_group'] = 'Old'
+
+age_groups = {'Young':[min(md_young['age']), max(md_young['age'])], 'Middle':[min(md_middle['age']), max(md_middle['age'])], 'Old':[min(md_old['age']), max(md_old['age'])]}
+    
+```
+
+### Gender
+
+```{python}
+var = 'md$gender'
+r2, p = permanova.loc[var, 'R2'], permanova.loc[var, 'Pr(>F)']
+other_r2 = r2
+for row in permanova.index.values:
+  if var in row and row != var:
+    other_r2 += permanova.loc[row, 'R2']
+
+text = 'Gender:\n'
+text += 'R$^{2}$='+str(round(r2, 4))+', $p$='+str(round(p, 3))+'\n'
+text += 'Combined R$^{2}$='+str(round(other_r2, 4))
+
+fig = plt.figure(figsize=(8,8))
+ax_pcoa = plt.subplot2grid((10,10),(0,0), colspan=7, rowspan=7)
+ax_bottom = plt.subplot2grid((10,10),(7,0), rowspan=3, colspan=7)
+ax_side = plt.subplot2grid((10,10),(0,7), colspan=3, rowspan=7)
+
+vals_bottom, vals_side = {'Male':[], 'Female':[]}, {'Male':[], 'Female':[]}
+for sample in md.index.values:
+  try:
+    group = md.loc[sample, 'gender']
+    pc1, pc2 = pca.loc[sample, 'PC1'], pca.loc[sample, 'PC2']
+  except:
+    continue
+  vals_bottom[group].append(pc1)
+  vals_side[group].append(pc2)
+  sc = ax_pcoa.scatter(pc1, pc2, marker='o', color=colors_gender[group], alpha=0.5)
+
+count = 0
+labs, locs = [], []
+for v in vals_bottom:
+  sc = ax_bottom.scatter(vals_bottom[v], np.random.normal(count, scale=0.08, size=len(vals_bottom[v])), marker='o', color=colors_gender[v], alpha=0.5)
+  sc = ax_side.scatter(np.random.normal(count, scale=0.08, size=len(vals_side[v])), vals_side[v], marker='o', color=colors_gender[v], alpha=0.5)
+  box = ax_bottom.boxplot([vals_bottom[v]], positions=[count], widths=0.6, showfliers=False, vert=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  box = ax_side.boxplot([vals_side[v]], positions=[count], widths=0.6, showfliers=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  ce = confidence_ellipse(np.asarray(vals_bottom[v]), np.asarray(vals_side[v]), ax=ax_pcoa, edgecolor=colors_gender[v])
+  labs.append(v+'\n($n$='+str(len(vals_bottom[v]))+')')
+  locs.append(count)
+  count += 1
+
+plt.sca(ax_bottom)
+yt = plt.yticks(locs, labs)
+xl = plt.xlabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)')
+xt = plt.xlim([-0.045, 0.045])
+
+plt.sca(ax_side)
+xt = plt.xticks(locs, labs, rotation=90)
+yt = plt.yticks([])
+yt = plt.ylim([-0.06, 0.06])
+
+plt.sca(ax_pcoa)
+yl = plt.ylabel('PC2 ('+str(round(prop_explain[1]*100, 2))+'%)')
+ti = plt.title('Gender', fontweight='bold')
+xl = plt.xlim(ax_bottom.get_xlim())
+yl = plt.ylim(ax_side.get_ylim())
+xt = plt.xticks([])
+
+tx = ax_bottom.text(1.2, 0, text, ha='center', va='bottom', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.savefig(folder+'figures/beta_gender.png', dpi=600, bbox_inches='tight')
+```
+
+### Ethnicity
+
+```{python}
+var = 'md$ethnicity'
+r2, p = permanova.loc[var, 'R2'], permanova.loc[var, 'Pr(>F)']
+other_r2 = r2
+for row in permanova.index.values:
+  if var in row and row != var:
+    other_r2 += permanova.loc[row, 'R2']
+
+text = 'Ethnicity:\n'
+text += 'R$^{2}$='+str(round(r2, 4))+', $p$='+str(round(p, 3))+'\n'
+text += 'Combined R$^{2}$='+str(round(other_r2, 4))
+
+fig = plt.figure(figsize=(8,8))
+ax_pcoa = plt.subplot2grid((10,10),(0,0), colspan=7, rowspan=7)
+ax_bottom = plt.subplot2grid((10,10),(7,0), rowspan=3, colspan=7)
+ax_side = plt.subplot2grid((10,10),(0,7), colspan=3, rowspan=7)
+
+vals_bottom, vals_side = {'White':[], 'South Asian':[], 'East Asian':[]}, {'White':[], 'South Asian':[], 'East Asian':[]}
+for sample in md.index.values:
+  try:
+    group = md.loc[sample, 'ethnicity']
+    pc1, pc2 = pca.loc[sample, 'PC1'], pca.loc[sample, 'PC2']
+  except:
+    continue
+  vals_bottom[group].append(pc1)
+  vals_side[group].append(pc2)
+  sc = ax_pcoa.scatter(pc1, pc2, marker='o', color=colors_ethnicity[group], alpha=0.5)
+
+count = 0
+labs, locs = [], []
+for v in vals_bottom:
+  sc = ax_bottom.scatter(vals_bottom[v], np.random.normal(count, scale=0.08, size=len(vals_bottom[v])), marker='o', color=colors_ethnicity[v], alpha=0.5)
+  sc = ax_side.scatter(np.random.normal(count, scale=0.08, size=len(vals_side[v])), vals_side[v], marker='o', color=colors_ethnicity[v], alpha=0.5)
+  box = ax_bottom.boxplot([vals_bottom[v]], positions=[count], widths=0.6, showfliers=False, vert=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  box = ax_side.boxplot([vals_side[v]], positions=[count], widths=0.6, showfliers=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  ce = confidence_ellipse(np.asarray(vals_bottom[v]), np.asarray(vals_side[v]), ax=ax_pcoa, edgecolor=colors_ethnicity[v])
+  labs.append(v+'\n($n$='+str(len(vals_bottom[v]))+')')
+  locs.append(count)
+  count += 1
+
+plt.sca(ax_bottom)
+yt = plt.yticks(locs, labs)
+xl = plt.xlabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)')
+xt = plt.xlim([-0.045, 0.045])
+
+plt.sca(ax_side)
+xt = plt.xticks(locs, labs, rotation=90)
+yt = plt.yticks([])
+yt = plt.ylim([-0.06, 0.06])
+
+plt.sca(ax_pcoa)
+yl = plt.ylabel('PC2 ('+str(round(prop_explain[1]*100, 2))+'%)')
+ti = plt.title('Ethnicity', fontweight='bold')
+xl = plt.xlim(ax_bottom.get_xlim())
+yl = plt.ylim(ax_side.get_ylim())
+xt = plt.xticks([])
+
+tx = ax_bottom.text(1.2, 0, text, ha='center', va='bottom', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.savefig(folder+'figures/beta_ethnicity.png', dpi=600, bbox_inches='tight')
+```
+
+### Age
+
+Age groups:
+```{python}
+var = 'md$age'
+r2, p = permanova.loc[var, 'R2'], permanova.loc[var, 'Pr(>F)']
+other_r2 = r2
+for row in permanova.index.values:
+  if var in row and row != var:
+    other_r2 += permanova.loc[row, 'R2']
+
+text = 'Age:\n'
+text += 'R$^{2}$='+str(round(r2, 4))+', $p$='+str(round(p, 3))+'\n'
+text += 'Combined R$^{2}$='+str(round(other_r2, 4))
+
+fig = plt.figure(figsize=(9,9))
+ax_pcoa = plt.subplot2grid((10,10),(0,0), colspan=7, rowspan=7)
+ax_bottom = plt.subplot2grid((10,10),(7,0), rowspan=3, colspan=7)
+ax_side = plt.subplot2grid((10,10),(0,7), colspan=3, rowspan=7)
+
+vals_bottom, vals_side = {'Young':[], 'Middle':[], 'Old':[]}, {'Young':[], 'Middle':[], 'Old':[]}
+for sample in md.index.values:
+  try:
+    group = md.loc[sample, 'age_group']
+    pc1, pc2 = pca.loc[sample, 'PC1'], pca.loc[sample, 'PC2']
+  except:
+    continue
+  vals_bottom[group].append(pc1)
+  vals_side[group].append(pc2)
+  sc = ax_pcoa.scatter(pc1, pc2, marker='o', color=colors_age[group], alpha=0.5)
+
+count = 0
+labs, locs = [], []
+for v in vals_bottom:
+  sc = ax_bottom.scatter(vals_bottom[v], np.random.normal(count, scale=0.08, size=len(vals_bottom[v])), marker='o', color=colors_age[v], alpha=0.5)
+  sc = ax_side.scatter(np.random.normal(count, scale=0.08, size=len(vals_side[v])), vals_side[v], marker='o', color=colors_age[v], alpha=0.5)
+  box = ax_bottom.boxplot([vals_bottom[v]], positions=[count], widths=0.6, showfliers=False, vert=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  box = ax_side.boxplot([vals_side[v]], positions=[count], widths=0.6, showfliers=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  ce = confidence_ellipse(np.asarray(vals_bottom[v]), np.asarray(vals_side[v]), ax=ax_pcoa, edgecolor=colors_age[v])
+  lab = v+': '+str(age_groups[v][0])+'-'+str(age_groups[v][1])+'\n'
+  lab += '($n$='+str(len(vals_bottom[v]))+')'
+  labs.append(lab)
+  locs.append(count)
+  count += 1
+
+plt.sca(ax_bottom)
+yt = plt.yticks(locs, labs)
+xl = plt.xlabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)')
+xt = plt.xlim([-0.045, 0.045])
+
+plt.sca(ax_side)
+xt = plt.xticks(locs, labs, rotation=90)
+yt = plt.yticks([])
+yt = plt.ylim([-0.06, 0.06])
+
+plt.sca(ax_pcoa)
+yl = plt.ylabel('PC2 ('+str(round(prop_explain[1]*100, 2))+'%)')
+ti = plt.title('Age groups', fontweight='bold')
+xl = plt.xlim(ax_bottom.get_xlim())
+yl = plt.ylim(ax_side.get_ylim())
+xt = plt.xticks([])
+
+tx = ax_bottom.text(1.2, 0, text, ha='center', va='bottom', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.savefig(folder+'figures/beta_age_groups.png', dpi=600, bbox_inches='tight')
+```
+
+Age scatter:
+```{python}
+var = 'md$age'
+r2, p = permanova.loc[var, 'R2'], permanova.loc[var, 'Pr(>F)']
+other_r2 = r2
+for row in permanova.index.values:
+  if var in row and row != var:
+    other_r2 += permanova.loc[row, 'R2']
+
+all_ages = md['age']
+m = cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=min(all_ages), vmax=max(all_ages)), cmap=cm.plasma)
+
+text = 'Age:\n'
+text += 'R$^{2}$='+str(round(r2, 4))+', $p$='+str(round(p, 3))+'\n'
+text += 'Combined R$^{2}$='+str(round(other_r2, 4))
+
+fig = plt.figure(figsize=(9,9))
+ax_pcoa = plt.subplot2grid((10,10),(0,0), colspan=7, rowspan=7)
+ax_bottom = plt.subplot2grid((10,10),(7,0), rowspan=3, colspan=7)
+ax_side = plt.subplot2grid((10,10),(0,7), colspan=3, rowspan=7)
+
+x, y, grouping = [], [], []
+count = 0
+for sample in md.index.values:
+  try:
+    group = md.loc[sample, 'age']
+    pc1, pc2 = pca.loc[sample, 'PC1'], pca.loc[sample, 'PC2']
+  except:
+    continue
+  color = m.to_rgba(group)
+  sc = ax_pcoa.scatter(pc1, pc2, marker='o', color=color, alpha=0.5)
+  sc = ax_bottom.scatter(pc1, group, marker='o', color=color, alpha=0.5)
+  sc = ax_side.scatter(group, pc2, marker='o', color=color, alpha=0.5)
+  ap = x.append(pc1), y.append(pc2), grouping.append(group)
+  count += 1
+
+plt.sca(ax_bottom)  
+theta = np.polyfit(grouping, x, 1)
+x_line = theta[1] + theta[0] * np.array([a for a in range(int(min(all_ages)),int(max(all_ages)))])
+li = plt.plot(x_line, [a for a in range(int(min(all_ages)),int(max(all_ages)))], 'k--')
+corr, p = spearmanr(grouping, x)
+string = "Spearman's:\nR="+str(round(corr,3))+', $p$='+str(round(p,3))+'\n'
+tx = ax_bottom.text(0.98, 0.98, string, ha='right', va='top', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.sca(ax_side)  
+theta = np.polyfit(grouping, y, 1)
+y_line = theta[1] + theta[0] * np.array([a for a in range(int(min(all_ages)),int(max(all_ages)))])
+li = plt.plot([a for a in range(int(min(all_ages)),int(max(all_ages)))], y_line, 'k--')
+corr, p = spearmanr(grouping, y)
+string = "Spearman's:\nR="+str(round(corr,3))+', $p$='+str(round(p,3))+'\n'
+tx = ax_side.text(0.98, 0.98, string, ha='right', va='top', transform=ax_side.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.sca(ax_bottom)
+#yt = plt.yticks(locs, labs)
+yl = plt.ylabel('Age (years)')
+xl = plt.xlabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)')
+xt = plt.xlim([-0.045, 0.045])
+
+plt.sca(ax_side)
+#xt = plt.xticks(locs, labs, rotation=90)
+xl = plt.xlabel('Age (years)')
+yt = plt.yticks([])
+yt = plt.ylim([-0.06, 0.06])
+
+plt.sca(ax_pcoa)
+yl = plt.ylabel('PC2 ('+str(round(prop_explain[1]*100, 2))+'%)')
+ti = plt.title('Age', fontweight='bold')
+xl = plt.xlim(ax_bottom.get_xlim())
+yl = plt.ylim(ax_side.get_ylim())
+xt = plt.xticks([])
+
+tx = ax_bottom.text(1.2, 0, text, ha='center', va='bottom', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.savefig(folder+'figures/beta_age_scatter.png', dpi=600, bbox_inches='tight')
+#plt.show()
+```
+
+### Physical/mental condition
+
+```{python}
+var = 'md$physical_mental_condition'
+r2, p = permanova.loc[var, 'R2'], permanova.loc[var, 'Pr(>F)']
+other_r2 = r2
+for row in permanova.index.values:
+  if var in row and row != var:
+    other_r2 += permanova.loc[row, 'R2']
+
+text = 'Physical/mental condition:\n'
+text += 'R$^{2}$='+str(round(r2, 4))+', $p$='+str(round(p, 3))+'\n'
+text += 'Combined R$^{2}$='+str(round(other_r2, 4))
+
+fig = plt.figure(figsize=(9,9))
+ax_pcoa = plt.subplot2grid((10,10),(0,0), colspan=7, rowspan=7)
+ax_bottom = plt.subplot2grid((10,10),(7,0), rowspan=3, colspan=7)
+ax_side = plt.subplot2grid((10,10),(0,7), colspan=3, rowspan=7)
+
+vals_bottom, vals_side = {'no_reported_condition':[], 'physical_condition':[], 'mental_condition':[], 'mental_and_physical':[]}, {'no_reported_condition':[], 'physical_condition':[], 'mental_condition':[], 'mental_and_physical':[]}
+for sample in md.index.values:
+  try:
+    group = md.loc[sample, 'physical_mental_condition']
+    pc1, pc2 = pca.loc[sample, 'PC1'], pca.loc[sample, 'PC2']
+  except:
+    continue
+  vals_bottom[group].append(pc1)
+  vals_side[group].append(pc2)
+  sc = ax_pcoa.scatter(pc1, pc2, marker='o', color=colors_condition[group], alpha=0.5)
+
+count = 0
+labs, locs = [], []
+for v in vals_bottom:
+  sc = ax_bottom.scatter(vals_bottom[v], np.random.normal(count, scale=0.08, size=len(vals_bottom[v])), marker='o', color=colors_condition[v], alpha=0.5)
+  sc = ax_side.scatter(np.random.normal(count, scale=0.08, size=len(vals_side[v])), vals_side[v], marker='o', color=colors_condition[v], alpha=0.5)
+  box = ax_bottom.boxplot([vals_bottom[v]], positions=[count], widths=0.6, showfliers=False, vert=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  box = ax_side.boxplot([vals_side[v]], positions=[count], widths=0.6, showfliers=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  ce = confidence_ellipse(np.asarray(vals_bottom[v]), np.asarray(vals_side[v]), ax=ax_pcoa, edgecolor=colors_condition[v])
+  labs.append(v+'\n($n$='+str(len(vals_bottom[v]))+')')
+  locs.append(count)
+  count += 1
+
+plt.sca(ax_bottom)
+yt = plt.yticks(locs, labs)
+xl = plt.xlabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)')
+xt = plt.xlim([-0.045, 0.045])
+
+plt.sca(ax_side)
+xt = plt.xticks(locs, labs, rotation=90)
+yt = plt.yticks([])
+yt = plt.ylim([-0.06, 0.06])
+
+plt.sca(ax_pcoa)
+yl = plt.ylabel('PC2 ('+str(round(prop_explain[1]*100, 2))+'%)')
+ti = plt.title('Physical/mental condition', fontweight='bold')
+xl = plt.xlim(ax_bottom.get_xlim())
+yl = plt.ylim(ax_side.get_ylim())
+xt = plt.xticks([])
+
+tx = ax_bottom.text(1.3, 0, text, ha='center', va='bottom', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.savefig(folder+'figures/beta_physical_mental_condition.png', dpi=600, bbox_inches='tight')
+```
+
+### Antibiotics
+
+```{python}
+var = 'md$antibiotics'
+r2, p = permanova.loc[var, 'R2'], permanova.loc[var, 'Pr(>F)']
+other_r2 = r2
+for row in permanova.index.values:
+  if var in row and row != var:
+    other_r2 += permanova.loc[row, 'R2']
+
+text = 'Antibiotics:\n'
+text += 'R$^{2}$='+str(round(r2, 4))+', $p$='+str(round(p, 3))+'\n'
+text += 'Combined R$^{2}$='+str(round(other_r2, 4))
+
+fig = plt.figure(figsize=(9,9))
+ax_pcoa = plt.subplot2grid((10,10),(0,0), colspan=7, rowspan=7)
+ax_bottom = plt.subplot2grid((10,10),(7,0), rowspan=3, colspan=7)
+ax_side = plt.subplot2grid((10,10),(0,7), colspan=3, rowspan=7)
+
+vals_bottom, vals_side = {'never':[], 'in_the_last_month':[]}, {'never':[], 'in_the_last_month':[]}
+for sample in md.index.values:
+  try:
+    group = md.loc[sample, 'antibiotics']
+    pc1, pc2 = pca.loc[sample, 'PC1'], pca.loc[sample, 'PC2']
+    vals_bottom[group].append(pc1)
+    vals_side[group].append(pc2)
+  except:
+    continue
+  sc = ax_pcoa.scatter(pc1, pc2, marker='o', color=colors_antibiotics[group], alpha=0.5)
+
+count = 0
+labs, locs = [], []
+for v in vals_bottom:
+  sc = ax_bottom.scatter(vals_bottom[v], np.random.normal(count, scale=0.08, size=len(vals_bottom[v])), marker='o', color=colors_antibiotics[v], alpha=0.5)
+  sc = ax_side.scatter(np.random.normal(count, scale=0.08, size=len(vals_side[v])), vals_side[v], marker='o', color=colors_antibiotics[v], alpha=0.5)
+  box = ax_bottom.boxplot([vals_bottom[v]], positions=[count], widths=0.6, showfliers=False, vert=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  box = ax_side.boxplot([vals_side[v]], positions=[count], widths=0.6, showfliers=False)
+  for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+  ce = confidence_ellipse(np.asarray(vals_bottom[v]), np.asarray(vals_side[v]), ax=ax_pcoa, edgecolor=colors_antibiotics[v])
+  labs.append(v+'\n($n$='+str(len(vals_bottom[v]))+')')
+  locs.append(count)
+  count += 1
+
+plt.sca(ax_bottom)
+yt = plt.yticks(locs, labs)
+xl = plt.xlabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)')
+xt = plt.xlim([-0.045, 0.045])
+
+plt.sca(ax_side)
+xt = plt.xticks(locs, labs, rotation=90)
+yt = plt.yticks([])
+yt = plt.ylim([-0.06, 0.06])
+
+plt.sca(ax_pcoa)
+yl = plt.ylabel('PC2 ('+str(round(prop_explain[1]*100, 2))+'%)')
+ti = plt.title('Antibiotics', fontweight='bold')
+xl = plt.xlim(ax_bottom.get_xlim())
+yl = plt.ylim(ax_side.get_ylim())
+xt = plt.xticks([])
+
+tx = ax_bottom.text(1.2, 0, text, ha='center', va='bottom', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.savefig(folder+'figures/beta_antibiotics.png', dpi=600, bbox_inches='tight')
+```
+
+### HEFI scatter
+
+```{python}
+var = 'md$HEFI'
+r2, p = permanova.loc[var, 'R2'], permanova.loc[var, 'Pr(>F)']
+other_r2 = r2
+for row in permanova.index.values:
+  if var in row and row != var:
+    other_r2 += permanova.loc[row, 'R2']
+
+all_hefi = md['HEFI']
+m = cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=min(all_hefi), vmax=max(all_hefi)), cmap=cm.summer)
+
+text = 'HEFI:\n'
+text += 'R$^{2}$='+str(round(r2, 4))+', $p$='+str(round(p, 3))+'\n'
+text += 'Combined R$^{2}$='+str(round(other_r2, 4))
+
+fig = plt.figure(figsize=(9,9))
+ax_pcoa = plt.subplot2grid((10,10),(0,0), colspan=7, rowspan=7)
+ax_bottom = plt.subplot2grid((10,10),(7,0), rowspan=3, colspan=7)
+ax_side = plt.subplot2grid((10,10),(0,7), colspan=3, rowspan=7)
+
+x, y, grouping = [], [], []
+count = 0
+for sample in md.index.values:
+  try:
+    group = md.loc[sample, 'HEFI']
+    pc1, pc2 = pca.loc[sample, 'PC1'], pca.loc[sample, 'PC2']
+  except:
+    continue
+  if np.isnan(group):
+    continue
+  color = m.to_rgba(group)
+  sc = ax_pcoa.scatter(pc1, pc2, marker='o', color=color, alpha=0.5)
+  sc = ax_bottom.scatter(pc1, group, marker='o', color=color, alpha=0.5)
+  sc = ax_side.scatter(group, pc2, marker='o', color=color, alpha=0.5)
+  ap = x.append(pc1), y.append(pc2), grouping.append(group)
+  count += 1
+
+plt.sca(ax_bottom)  
+theta = np.polyfit(grouping, x, 1)
+x_line = theta[1] + theta[0] * np.array([a for a in range(int(min(all_hefi)),int(max(all_hefi)))])
+li = plt.plot(x_line, [a for a in range(int(min(all_hefi)),int(max(all_hefi)))], 'k--')
+corr, p = spearmanr(grouping, x)
+string = "Spearman's:\nR="+str(round(corr,3))+', $p$='+str(round(p,3))+'\n'
+tx = ax_bottom.text(0.98, 0.98, string, ha='right', va='top', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.sca(ax_side)  
+theta = np.polyfit(grouping, y, 1)
+y_line = theta[1] + theta[0] * np.array([a for a in range(int(min(all_hefi)),int(max(all_hefi)))])
+li = plt.plot([a for a in range(int(min(all_hefi)),int(max(all_hefi)))], y_line, 'k--')
+corr, p = spearmanr(grouping, y)
+string = "Spearman's:\nR="+str(round(corr,3))+', $p$='+str(round(p,3))+'\n'
+tx = ax_side.text(0.98, 0.98, string, ha='right', va='top', transform=ax_side.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.sca(ax_bottom)
+#yt = plt.yticks(locs, labs)
+yl = plt.ylabel('HEFI')
+xl = plt.xlabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)')
+xt = plt.xlim([-0.045, 0.045])
+
+plt.sca(ax_side)
+#xt = plt.xticks(locs, labs, rotation=90)
+xl = plt.xlabel('HEFI')
+yt = plt.yticks([])
+yt = plt.ylim([-0.06, 0.06])
+
+plt.sca(ax_pcoa)
+yl = plt.ylabel('PC2 ('+str(round(prop_explain[1]*100, 2))+'%)')
+ti = plt.title('HEFI', fontweight='bold')
+xl = plt.xlim(ax_bottom.get_xlim())
+yl = plt.ylim(ax_side.get_ylim())
+xt = plt.xticks([])
+
+tx = ax_bottom.text(1.2, 0, text, ha='center', va='bottom', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.savefig(folder+'figures/beta_HEFI_scatter.png', dpi=600, bbox_inches='tight')
+#plt.show()
+```
+
+### Social deprivation scatter
+
+```{python}
+var = 'md$cur_msd_soc'
+r2, p = permanova.loc[var, 'R2'], permanova.loc[var, 'Pr(>F)']
+other_r2 = r2
+for row in permanova.index.values:
+  if var in row and row != var:
+    other_r2 += permanova.loc[row, 'R2']
+
+all_soc = md['cur_msd_soc']
+m = cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=min(all_soc), vmax=max(all_soc)), cmap=cm.spring)
+
+text = 'Social deprivation:\n'
+text += 'R$^{2}$='+str(round(r2, 4))+', $p$='+str(round(p, 3))+'\n'
+text += 'Combined R$^{2}$='+str(round(other_r2, 4))
+
+fig = plt.figure(figsize=(9,9))
+ax_pcoa = plt.subplot2grid((10,10),(0,0), colspan=7, rowspan=7)
+ax_bottom = plt.subplot2grid((10,10),(7,0), rowspan=3, colspan=7)
+ax_side = plt.subplot2grid((10,10),(0,7), colspan=3, rowspan=7)
+
+x, y, grouping = [], [], []
+count = 0
+for sample in md.index.values:
+  try:
+    group = md.loc[sample, 'cur_msd_soc']
+    pc1, pc2 = pca.loc[sample, 'PC1'], pca.loc[sample, 'PC2']
+  except:
+    continue
+  if np.isnan(group):
+    continue
+  color = m.to_rgba(group)
+  sc = ax_pcoa.scatter(pc1, pc2, marker='o', color=color, alpha=0.5)
+  sc = ax_bottom.scatter(pc1, group, marker='o', color=color, alpha=0.5)
+  sc = ax_side.scatter(group, pc2, marker='o', color=color, alpha=0.5)
+  ap = x.append(pc1), y.append(pc2), grouping.append(group)
+  count += 1
+
+plt.sca(ax_bottom)  
+theta = np.polyfit(grouping, x, 1)
+val_range = [min(all_soc), np.mean(all_soc), max(all_soc)]
+x_line = theta[1] + theta[0] * np.array(val_range)
+li = plt.plot(x_line, val_range, 'k--')
+corr, p = spearmanr(grouping, x)
+string = "Spearman's:\nR="+str(round(corr,3))+', $p$='+str(round(p,3))
+tx = ax_bottom.text(0.98, 0.98, string, ha='right', va='top', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.sca(ax_side)  
+theta = np.polyfit(grouping, y, 1)
+val_range = [min(all_soc), np.mean(all_soc), max(all_soc)]
+y_line = theta[1] + theta[0] * np.array(val_range)
+li = plt.plot(val_range, y_line, 'k--')
+corr, p = spearmanr(grouping, y)
+string = "Spearman's:\nR="+str(round(corr,3))+', $p$='+str(round(p,3))
+tx = ax_side.text(0.98, 0.98, string, ha='right', va='top', transform=ax_side.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.sca(ax_bottom)
+#yt = plt.yticks(locs, labs)
+yl = plt.ylabel('Social deprivation')
+xl = plt.xlabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)')
+xt = plt.xlim([-0.045, 0.045])
+
+plt.sca(ax_side)
+#xt = plt.xticks(locs, labs, rotation=90)
+xl = plt.xlabel('Social deprivation')
+yt = plt.yticks([])
+yt = plt.ylim([-0.06, 0.06])
+
+plt.sca(ax_pcoa)
+yl = plt.ylabel('PC2 ('+str(round(prop_explain[1]*100, 2))+'%)')
+ti = plt.title('Social deprivation', fontweight='bold')
+xl = plt.xlim(ax_bottom.get_xlim())
+yl = plt.ylim(ax_side.get_ylim())
+xt = plt.xticks([])
+
+tx = ax_bottom.text(1.2, 0, text, ha='center', va='bottom', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.savefig(folder+'figures/beta_Social_deprivation_scatter.png', dpi=600, bbox_inches='tight')
+#plt.show()
+```
+
+### Material deprivation scatter
+
+```{python}
+var = 'md$cur_msd_mat'
+r2, p = permanova.loc[var, 'R2'], permanova.loc[var, 'Pr(>F)']
+other_r2 = r2
+for row in permanova.index.values:
+  if var in row and row != var:
+    other_r2 += permanova.loc[row, 'R2']
+
+all_mat = md['cur_msd_mat']
+m = cm.ScalarMappable(norm=mpl.colors.Normalize(vmin=min(all_mat), vmax=max(all_mat)), cmap=cm.autumn)
+
+text = 'Material deprivation:\n'
+text += 'R$^{2}$='+str(round(r2, 4))+', $p$='+str(round(p, 3))+'\n'
+text += 'Combined R$^{2}$='+str(round(other_r2, 4))
+
+fig = plt.figure(figsize=(9,9))
+ax_pcoa = plt.subplot2grid((10,10),(0,0), colspan=7, rowspan=7)
+ax_bottom = plt.subplot2grid((10,10),(7,0), rowspan=3, colspan=7)
+ax_side = plt.subplot2grid((10,10),(0,7), colspan=3, rowspan=7)
+
+x, y, grouping = [], [], []
+count = 0
+for sample in md.index.values:
+  try:
+    group = md.loc[sample, 'cur_msd_mat']
+    pc1, pc2 = pca.loc[sample, 'PC1'], pca.loc[sample, 'PC2']
+  except:
+    continue
+  if np.isnan(group):
+    continue
+  color = m.to_rgba(group)
+  sc = ax_pcoa.scatter(pc1, pc2, marker='o', color=color, alpha=0.5)
+  sc = ax_bottom.scatter(pc1, group, marker='o', color=color, alpha=0.5)
+  sc = ax_side.scatter(group, pc2, marker='o', color=color, alpha=0.5)
+  ap = x.append(pc1), y.append(pc2), grouping.append(group)
+  count += 1
+
+plt.sca(ax_bottom)  
+theta = np.polyfit(grouping, x, 1)
+val_range = [min(all_mat), np.mean(all_mat), max(all_mat)]
+x_line = theta[1] + theta[0] * np.array(val_range)
+li = plt.plot(x_line, val_range, 'k--')
+corr, p = spearmanr(grouping, x)
+string = "Spearman's:\nR="+str(round(corr,3))+', $p$='+str(round(p,3))
+tx = ax_bottom.text(0.98, 0.98, string, ha='right', va='top', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.sca(ax_side)  
+theta = np.polyfit(grouping, y, 1)
+val_range = [min(all_mat), np.mean(all_mat), max(all_mat)]
+y_line = theta[1] + theta[0] * np.array(val_range)
+li = plt.plot(val_range, y_line, 'k--')
+corr, p = spearmanr(grouping, y)
+string = "Spearman's:\nR="+str(round(corr,3))+', $p$='+str(round(p,3))
+tx = ax_side.text(0.98, 0.98, string, ha='right', va='top', transform=ax_side.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.sca(ax_bottom)
+#yt = plt.yticks(locs, labs)
+yl = plt.ylabel('Material deprivation')
+xl = plt.xlabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)')
+xt = plt.xlim([-0.045, 0.045])
+
+plt.sca(ax_side)
+#xt = plt.xticks(locs, labs, rotation=90)
+xl = plt.xlabel('Material deprivation')
+yt = plt.yticks([])
+yt = plt.ylim([-0.06, 0.06])
+
+plt.sca(ax_pcoa)
+yl = plt.ylabel('PC2 ('+str(round(prop_explain[1]*100, 2))+'%)')
+ti = plt.title('Material deprivation', fontweight='bold')
+xl = plt.xlim(ax_bottom.get_xlim())
+yl = plt.ylim(ax_side.get_ylim())
+xt = plt.xticks([])
+
+tx = ax_bottom.text(1.2, 0, text, ha='center', va='bottom', transform=ax_bottom.transAxes, bbox=dict(boxstyle='round', facecolor='white', alpha=0.7))
+
+plt.savefig(folder+'figures/beta_Material_deprivation_scatter.png', dpi=600, bbox_inches='tight')
+#plt.show()
+```
+
+### Overall plot
+
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv', index_col=0, header=0)
+#dist = pd.read_csv(folder+'QIIME2/processing/phylo_rpca/distance-matrix.tsv', index_col=0, header=0, sep='\t')
+pca = pd.read_csv(folder+'QIIME2/processing/phylo_rpca/ordination_pca.csv', index_col=0, header=0)
+metrics = ['gender', 'age', 'ethnicity', 'HEFI', 'cur_msd_mat', 'cur_msd_soc', 'antibiotics', 'physical_mental_condition']
+permanova = pd.read_csv(folder+'QIIME2/processing/permanova_all_vars_interaction.csv', index_col=0, header=0)
+
+metrics_md = ['md$'+m for m in metrics]
+permanova_red = permanova.loc[metrics_md, :]
+permanova_red = permanova_red.sort_values(by='R2', ascending=True)
+for row in permanova_red.index.values:
+  rename[row] = row.replace('md$', '')
+permanova_red = permanova_red.rename(index=rename)#.rename(index=rename)
+rename = {'gender':'Gender', 'ethnicity':'Ethnicity', 'antibiotics':'Antibiotics', 'cur_msd_mat':'Material deprivation', 'cur_msd_soc':'Social deprivation', 'physical_mental_condition':'Physical/mental condition', 'age':'Age'}
+
+fig = plt.figure(figsize=(15,20))
+ax_permanova = plt.subplot2grid((20,10),(0,0), colspan=2, rowspan=6)
+ax_alpha_stats = plt.subplot2grid((20,10),(0,2), colspan=1, rowspan=6)
+ax_metadata = plt.subplot2grid((20,10),(0,3), colspan=7, rowspan=6)
+ax_pca1 = plt.subplot2grid((20,10),(7,0), colspan=5, rowspan=6)
+ax_pca2 = plt.subplot2grid((20,10),(7,5), colspan=5, rowspan=6)
+ax_age_pc1 = plt.subplot2grid((20,9),(14,0), colspan=4, rowspan=2)
+ax_age_pc2 = plt.subplot2grid((20,9),(14,5), colspan=4, rowspan=2)
+#ax_age_pc3 = plt.subplot2grid((20,11),(14,8), colspan=3, rowspan=2)
+ax_age_alpha1 = plt.subplot2grid((20,11),(17,0), colspan=3, rowspan=2)
+ax_age_alpha2 = plt.subplot2grid((20,11),(17,4), colspan=3, rowspan=2)
+ax_age_alpha3 = plt.subplot2grid((20,11),(17,8), colspan=3, rowspan=2)
+
+#plot permanova values
+plt.sca(ax_permanova)
+bar_cols = ['#008B90' if p <= 0.05 else 'w' for p in permanova_red['Pr(>F)'].values]
+ba = ax_permanova.barh([x for x in range(permanova_red.shape[0])], width=permanova_red['R2'].values, height=0.8, color=bar_cols, edgecolor='#008B90')
+labels = []
+for label in permanova_red.index.values:
+  count_vals = md[md[label].notnull()].shape[0]
+  new_label = label
+  for orig in rename:
+    new_label = new_label.replace(orig, rename[orig])
+  labels.append(new_label+'\n($n$='+str(count_vals)+')')
+
+yl = plt.yticks([x for x in range(permanova_red.shape[0])], labels)
+ti = plt.title('A', fontweight='bold', loc='left'), plt.xlabel('PERMANOVA R$^{2}$', fontweight='bold'), plt.title('Contribution to\nvariation', fontweight='bold')
+
+#plot alpha stats
+alpha_stats1 = pd.read_csv(folder+'files/alpha_stats/faith_pd_all_vars_interaction.csv', index_col=0, header=0)
+alpha_stats2 = pd.read_csv(folder+'files/alpha_stats/simpson_e_all_vars_interaction.csv', index_col=0, header=0)
+alpha_stats3 = pd.read_csv(folder+'files/alpha_stats/simpson_all_vars_interaction.csv', index_col=0, header=0)
+#alpha_colors = []
+for r in range(len(permanova_red.index.values)):
+  row = permanova_red.index.values[r]
+  this_alpha = [alpha_stats1.loc[row, 'Pr(>F)'], alpha_stats2.loc[row, 'Pr(>F)'], alpha_stats3.loc[row, 'Pr(>F)']]
+  this_alpha = ['#e373fc' if a <= 0.05 else 'w' for a in this_alpha]
+  ba = ax_alpha_stats.barh([r, r, r], width=[1, 1, 1], left=[0, 1, 2], height=0.8, color=this_alpha, edgecolor='k')
+  #alpha_colors.append(this_alpha)
+
+plt.sca(ax_alpha_stats)
+yl = plt.yticks([]), plt.xticks([0.5, 1.5, 2.5], ["FPD", "SE", "SI"]), plt.xlim([0, 3])
+ti = plt.title('B', fontweight='bold', loc='left'), plt.title('Alpha div.\nstats', fontweight='bold')
+
+#plot metadata values
+plt.sca(ax_metadata)
+count = 0
+for row in permanova_red.index.values:
+  if row == 'gender':
+    gender = list(md['gender'].values)
+    males, females = gender.count('Male')/md.shape[0], gender.count('Female')/md.shape[0]
+    ba = ax_metadata.barh([count, count], width=[males, females], left=[0, males], height=0.8, color=[colors_gender['Male'], colors_gender['Female']], edgecolor='k', alpha=0.7)
+    tx = ax_metadata.text(males/2, count, 'Males\n('+str(round(males*100))+'%)', ha='center', va='center')
+    tx = ax_metadata.text((females/2)+males, count, 'Females\n('+str(round(females*100))+'%)', ha='center', va='center')
+  elif row == 'ethnicity':
+    ethnicity = list(md['ethnicity'].values)
+    white, sasian, easian = ethnicity.count('White')/md.shape[0], ethnicity.count('South Asian')/md.shape[0], ethnicity.count('East Asian')/md.shape[0]
+    ba = ax_metadata.barh([count, count, count], width=[easian, sasian, white], left=[0, easian, sasian+easian], height=0.8, color=[colors_ethnicity['East Asian'], colors_ethnicity['South Asian'], colors_ethnicity['White']], edgecolor='k', alpha=0.7)
+    tx = ax_metadata.text(easian/2, count, 'East Asian\n('+str(round(easian*100))+'%)', ha='center', va='center')
+    tx = ax_metadata.text((sasian/2)+easian, count, 'South Asian\n('+str(round(sasian*100))+'%)', ha='center', va='center')
+    tx = ax_metadata.text((white/2)+easian+sasian, count, 'White\n('+str(round(white*100))+'%)', ha='center', va='center')
+  elif row == 'antibiotics':
+    antibiotics = list(md['antibiotics'].values)
+    never, last_month = antibiotics.count('never')/md.shape[0], antibiotics.count('in_the_last_month')/md.shape[0]
+    no_info = 1-never-last_month
+    ba = ax_metadata.barh([count, count, count], width=[last_month, never, no_info], left=[0, last_month, last_month+never], height=0.8, color=[colors_antibiotics['in_the_last_month'], colors_antibiotics['never'], 'w'], edgecolor='k', alpha=0.7)
+    # ba = ax_metadata.barh([count, count], width=[last_month, never], left=[0, last_month], height=0.8, color=[colors_antibiotics['in_the_last_month'], colors_antibiotics['never']], edgecolor='k', alpha=0.7)
+    tx = ax_metadata.text(last_month/2, count, 'Yes\n('+str(round(last_month*100))+'%)', ha='center', va='center')
+    tx = ax_metadata.text((never/2)+last_month, count, 'No\n('+str(round(never*100))+'%)', color='w', ha='center', va='center')
+    tx = ax_metadata.text((no_info/2)+never+last_month, count, 'NA\n('+str(round(no_info*100))+'%)', ha='center', va='center')
+  elif row == 'physical_mental_condition':
+    condition = list(md['physical_mental_condition'].values)
+    none, physical, mental, both = condition.count('no_reported_condition')/md.shape[0], condition.count('physical_condition')/md.shape[0], condition.count('mental_condition')/md.shape[0], condition.count('mental_and_physical')/md.shape[0]
+    ba = ax_metadata.barh([count, count, count, count], width=[physical, mental, both, none], left=[0, physical, physical+mental, physical+mental+both], color=[colors_condition['physical_condition'], colors_condition['mental_condition'], colors_condition['mental_and_physical'], colors_condition['no_reported_condition']], edgecolor='k', alpha=0.7)
+    tx = ax_metadata.text((physical/2), count, 'Physical\n('+str(round(physical*100))+'%)', ha='center', va='center')
+    tx = ax_metadata.text((mental/2)+physical, count, 'Mental\n('+str(round(mental*100))+'%)', ha='center', va='center')
+    tx = ax_metadata.text((both/2)+physical+mental, count, 'Both\n('+str(round(both*100))+'%)', ha='center', va='center')
+    tx = ax_metadata.text((none/2)+physical+mental+both, count, 'No reported conditions\n('+str(round(none*100))+'%)', ha='center', va='center')
+  elif row == 'age':
+    ages = [round(v, 1) for v in list(md['age'].values)]
+    unique_ages = sorted(list(set(ages)))
+    counts, age_plot = [], []
+    age_span = 1/(max(ages)-min(ages))
+    for a in range(len(unique_ages)):
+      cnt = (ages.count(unique_ages[a])/md.shape[0])
+      counts.append(cnt)
+      age_plot.append((unique_ages[a]-min(ages))*age_span)
+    counts_norm = [(c/max(counts))+count-0.4 for c in counts]
+    w = lowess(counts_norm, unique_ages, frac=0.25, return_sorted=False)
+    age_dict = {}
+    for c in range(len(unique_ages)):
+      age_dict[unique_ages[c]] = w[c]
+    li = ax_metadata.plot(age_plot, w, 'k-')
+    li = ax_metadata.fill_between(age_plot, [count-0.4 for c in range(len(w))], w, color='k', alpha=0.3)
+    min_age, med_age, max_age = min(list(md['age'].values)), np.median(list(md['age'].values)), max(list(md['age'].values))
+    tx = ax_metadata.text(0.005, age_dict[round(min_age, 1)]+0.2, str(round(min_age, 2))+'y', ha='left', va='bottom')
+    tx = ax_metadata.text(0.995, age_dict[round(max_age, 1)]+0.1, str(round(max_age, 2))+'y', ha='right', va='bottom')
+    tx = ax_metadata.text(((med_age-min_age)*age_span), age_dict[round(med_age, 1)]-0.3, str(round(med_age, 2))+'y', ha='center', va='center')
+    tx = ax_metadata.scatter(((med_age-min_age)*age_span), age_dict[round(med_age, 1)], marker='o', color='k', s=10)
+    #tx = ax_metadata.annotate('', xy=((med_age-min_age)*age_span, age_dict[round(med_age, 1)]), xytext=(((med_age-min_age)*age_span), age_dict[round(med_age, 1)]-0.6), arrowprops=dict(facecolor='black', shrink=0.01, linewidth=0.5))
+  else:
+    var = list(md[row].values)
+    counts, name_groups, group_plot = [], [], []
+    rng = max(var)-min(var)
+    var_span = 1/rng
+    interval = rng/150
+    start = min(var)
+    for a in range(150):
+      cnt = len([i for i in var if start <= i <= start+interval])/md.shape[0]
+      counts.append(cnt)
+      mid_point = np.mean([start, start+interval])
+      name_groups.append(mid_point)
+      group_plot.append((mid_point-min(var))*var_span)
+      start += interval
+    counts_norm = [(c/max(counts))+count-0.4 for c in counts]
+    w = lowess(counts_norm, name_groups, frac=0.25, return_sorted=False)
+    var_dict = {}
+    for c in range(len(name_groups)):
+      var_dict[name_groups[c]] = w[c]
+    li = ax_metadata.plot(group_plot, w, 'k-')
+    li = ax_metadata.fill_between(group_plot, [count-0.4 for c in range(len(w))], w, color='k', alpha=0.3)
+    min_var, med_var, max_var = min(list(md[row].values)), np.median([v for v in list(md[row].values) if not np.isnan(v)]), max(list(md[row].values))
+    closest_dist_min, closest_var_min, closest_dist_med, closest_var_med, closest_dist_max, closest_var_max = 1, '', 1, '', 1, ''
+    for v in var_dict: 
+      if abs(min_var-v) < closest_dist_min:
+        closest_dist_min, closest_var_min = abs(min_var-v), v
+      if abs(med_var-v) < closest_dist_med:
+        closest_dist_med, closest_var_med = abs(med_var-v), v
+      if abs(max_var-v) < closest_dist_max:
+        closest_dist_max, closest_var_max = abs(max_var-v), v
+    if row == 'HEFI': und = 2
+    else: rnd = 3
+    tx = ax_metadata.text(0.005, var_dict[closest_var_min]+0.1, str(round(min_var, rnd)), ha='left', va='bottom')
+    tx = ax_metadata.text(0.995, var_dict[closest_var_max]+0.1, str(round(max_var, rnd)), ha='right', va='bottom')
+    tx = ax_metadata.text(((med_var-min_var)*var_span), var_dict[closest_var_med]-0.35, str(round(med_var, rnd)), ha='center', va='center')
+    tx = ax_metadata.scatter(((med_var-min_var)*var_span), var_dict[closest_var_med], marker='o', color='k', s=10)
+    #tx = ax_metadata.annotate('', xy=((med_var-min_var)*var_span, var_dict[closest_var_med]), xytext=((med_var-min_var)*var_span, var_dict[closest_var_med]-0.6), arrowprops=dict(facecolor='black', shrink=0.01, linewidth=0.5))
+  count += 1
+
+xl = plt.xlim([0, 1]), plt.ylim(ax_permanova.get_ylim()), plt.yticks([]), plt.xticks([])
+ti = plt.title('C', fontweight='bold', loc='left'), plt.title('Sample demographics', fontweight='bold')
+
+#pcoa plot
+for sample in md.index.values:
+  try:
+    pc1, pc2 = pca.loc[sample, 'PC1'], pca.loc[sample, 'PC2']
+  except:
+    continue
+  age, gender, ethnicity = md.loc[sample, 'age'], md.loc[sample, 'gender'], md.loc[sample, 'ethnicity']
+  # color = m.to_rgba(group)
+  sc = ax_pca1.scatter(pc1, pc2, marker='o', color=colors_gender[gender], alpha=0.2, s=age**2)
+  sc = ax_pca2.scatter(pc1, pc2, marker='o', color=colors_ethnicity[ethnicity], alpha=0.2, s=age**2)
+
+plt.sca(ax_pca1)
+ti = plt.title('D', fontweight='bold', loc='left'), plt.title('Beta diversity: phylogenetic-RPCA', fontweight='bold')
+xt = plt.xlim([-0.045, 0.045]), plt.ylim([-0.06, 0.06])
+al = plt.xlabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)'), plt.ylabel('PC2 ('+str(round(prop_explain[1]*100, 2))+'%)')
+
+plt.sca(ax_pca2)
+ti = plt.title('E', fontweight='bold', loc='left'), plt.title('Beta diversity: phylogenetic-RPCA', fontweight='bold')
+xt = plt.xlim([-0.045, 0.045]), plt.ylim([-0.06, 0.06]), plt.yticks([])
+al = plt.xlabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)')
+
+handles_gender = [Line2D([0], [0], marker='s', color='w', label=gen, markerfacecolor=colors_gender[gen], markersize=12) for gen in ['Male', 'Female']]
+handles_ethnicity = [Line2D([0], [0], marker='s', color='w', label=eth, markerfacecolor=colors_ethnicity[eth], markersize=12) for eth in ['East Asian', 'South Asian', 'White']]
+leg = ax_pca1.legend(handles=handles_gender, loc='upper right')
+leg = ax_pca2.legend(handles=handles_ethnicity, loc='upper right')
+for ax in [ax_pca1, ax_pca2]:
+  sc = ax.scatter(0.03, 0.96, marker='o', s=5**2, color='gray', transform=ax.transAxes)
+  sc = ax.scatter(0.08, 0.96, marker=r'$\rightarrow$', s=20**2, color='k', transform=ax.transAxes)
+  sc = ax.scatter(0.14, 0.96, marker='o', s=19**2, color='gray', transform=ax.transAxes)
+  tx = ax.text(0.03, 0.93, '5y', ha='center', va='center', transform=ax.transAxes)
+  tx = ax.text(0.14, 0.91, '19y', ha='center', va='center', transform=ax.transAxes)
+
+
+#smooth pcoa plot
+samples = [m for m in md.index.values if m in pca.index.values]
+md_samples = md.loc[samples, :]
+#pca_order = pca.loc[samples, :]
+# grouping = [['Male', 'East Asian'], ['Female', 'East Asian'], ['Male', 'South Asian'], ['Female', 'South Asian'], ['Male', 'White'], ['Female', 'White']]
+
+all_ages = md_samples.loc[:, 'age']
+all_pc1 = pca.loc[md_samples.index.values, 'PC1']
+all_pc2 = pca.loc[md_samples.index.values, 'PC2']
+
+plt.sca(ax_age_pc1)
+sc = plt.scatter(all_ages, all_pc1, marker='o', color='gray', alpha=0.03)
+
+plt.sca(ax_age_pc2)
+sc = plt.scatter(all_ages, all_pc2, marker='o', color='gray', alpha=0.03)
+
+grouping = [['gender', 'Male', colors_gender['Male']], ['gender', 'Female', colors_gender['Female']], ['ethnicity', 'South Asian', colors_ethnicity['South Asian']], ['ethnicity', 'East Asian', colors_ethnicity['East Asian']], ['ethnicity', 'White', colors_ethnicity['White']]]
+for a in range(len(grouping)):
+  group = md_samples[md_samples[grouping[a][0]] == grouping[a][1]]
+  all_ages = sorted(list(set([round(g, 1) for g in group['age']])))
+  vals_group_pc1, vals_group_pc2 = {}, {}
+  for age in all_ages:
+    vals_group_pc1[age] = []
+    vals_group_pc2[age] = []
+  for row in group.index.values:
+    age = round(group.loc[row, 'age'], 1)
+    try:
+      vals_group_pc1[age].append(pca.loc[row, 'PC1'])
+      vals_group_pc2[age].append(pca.loc[row, 'PC2'])
+    except:
+      continue
+  age_means_pc1, age_means_pc2 = [], []
+  for age in all_ages:
+    age_means_pc1.append(np.mean(vals_group_pc1[age]))
+    age_means_pc2.append(np.mean(vals_group_pc2[age]))
+  w = lowess(age_means_pc1, all_ages, frac=0.35, return_sorted=False)
+  li = ax_age_pc1.plot(all_ages, w, color=grouping[a][2], linestyle='-')
+  adding = 0
+  if grouping[a][1] == 'White': adding += 0.004
+  if grouping[a][1] == 'South Asian': adding += 0.003
+  elif grouping[a][1] == 'Female': adding -= 0.0045
+  tx = ax_age_pc1.text(all_ages[-1]+0.5, w[-1]+adding, grouping[a][1], color=grouping[a][2], ha='left', va='center', bbox=dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.7, edgecolor=grouping[a][2]))
+  w = lowess(age_means_pc2, all_ages, frac=0.35, return_sorted=False)
+  li = ax_age_pc2.plot(all_ages, w, color=grouping[a][2], linestyle='-')
+  adding = 0
+  if grouping[a][1] == 'Male': adding -= 0.004
+  elif grouping[a][1] == 'East Asian': adding += 0.001
+  elif grouping[a][1] == 'South Asian': adding += 0.005
+  #elif grouping[a][1] == 'Female': adding -= 0.001
+  elif grouping[a][1] == 'White': adding -= 0.006
+  tx = ax_age_pc2.text(all_ages[-1]+0.5, w[-1]+adding, grouping[a][1], color=grouping[a][2], ha='left', va='center', bbox=dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.7, edgecolor=grouping[a][2]))
+  #add confidence intervals? https://www.statsmodels.org/dev/examples/notebooks/generated/lowess.html
+
+plt.sca(ax_age_pc1)
+ti = plt.title('F', fontweight='bold', loc='left'), plt.title('Beta diversity:\nphylogenetic-RPCA PC1', fontweight='bold'), plt.ylim([-0.02, 0.02])#, plt.xlim([4.99, 18.99])
+al = plt.ylabel('PC1 ('+str(round(prop_explain[0]*100, 2))+'%)'), plt.xlabel('Age (years)')
+
+plt.sca(ax_age_pc2)
+ti = plt.title('G', fontweight='bold', loc='left'), plt.title('Beta diversity:\nphylogenetic-RPCA PC2', fontweight='bold'), plt.ylim([-0.02, 0.02])#, plt.xlim([4.99, 18.99])
+al = plt.ylabel('PC2 ('+str(round(prop_explain[1]*100, 2))+'%)'), plt.xlabel('Age (years)')
+
+# plt.sca(ax_age_pc3)
+# ti = plt.title('G', fontweight='bold', loc='left'), plt.title('Beta diversity:\nphylogenetic-RPCA PC3', fontweight='bold')
+# al = plt.ylabel('PC3 ('+str(round(prop_explain[2]*100, 2))+'%)'), plt.xlabel('Age (years)')
+
+#smooth alpha plot
+alpha1 = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_faith_pd.csv', index_col=0, header=0)
+alpha2 = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_simpson_e.csv', index_col=0, header=0)
+alpha3 = pd.read_csv(folder+'QIIME2/processing/alpha_diversity/alpha_simpson.csv', index_col=0, header=0)
+samples = [m for m in md.index.values if m in alpha1.index.values]
+md_samples = md.loc[samples, :]
+
+all_ages = md_samples.loc[:, 'age']
+all_alpha1 = alpha1.loc[md_samples.index.values, 'Mean']
+all_alpha2 = alpha2.loc[md_samples.index.values, 'Mean']
+all_alpha3 = alpha3.loc[md_samples.index.values, 'Mean']
+
+plt.sca(ax_age_alpha1)
+sc = plt.scatter(all_ages, all_alpha1, marker='o', color='gray', alpha=0.03)
+
+plt.sca(ax_age_alpha2)
+sc = plt.scatter(all_ages, all_alpha2, marker='o', color='gray', alpha=0.03)
+
+plt.sca(ax_age_alpha3)
+sc = plt.scatter(all_ages, all_alpha3, marker='o', color='gray', alpha=0.03)
+
+grouping = [['gender', 'Male', colors_gender['Male']], ['gender', 'Female', colors_gender['Female']], ['ethnicity', 'South Asian', colors_ethnicity['South Asian']], ['ethnicity', 'East Asian', colors_ethnicity['East Asian']], ['ethnicity', 'White', colors_ethnicity['White']]]
+for a in range(len(grouping)):
+  group = md_samples[md_samples[grouping[a][0]] == grouping[a][1]]
+  all_ages = sorted(list(set([round(g, 1) for g in group['age']])))
+  #all_ages = [v for v in ages if v < 15.5]
+  vals_group_alpha1, vals_group_alpha2, vals_group_alpha3 = {}, {}, {}
+  for age in all_ages:
+    vals_group_alpha1[age] = []
+    vals_group_alpha2[age] = []
+    vals_group_alpha3[age] = []
+  for row in group.index.values:
+    age = round(group.loc[row, 'age'], 1)
+    #if age >= 15.5: continue
+    try:
+      vals_group_alpha1[age].append(alpha1.loc[row, 'Mean'])
+      vals_group_alpha2[age].append(alpha2.loc[row, 'Mean'])
+      vals_group_alpha3[age].append(alpha3.loc[row, 'Mean'])
+    except:
+      continue
+  age_means_alpha1, age_means_alpha2, age_means_alpha3  = [], [], []
+  for age in all_ages:
+    age_means_alpha1.append(np.mean(vals_group_alpha1[age]))
+    age_means_alpha2.append(np.mean(vals_group_alpha2[age]))
+    age_means_alpha3.append(np.mean(vals_group_alpha3[age]))
+  w = lowess(age_means_alpha1, all_ages, frac=0.35, return_sorted=False)
+  li = ax_age_alpha1.plot(all_ages, w, color=grouping[a][2], linestyle='-')
+  adding = 0
+  if grouping[a][1] == 'South Asian': adding += 0.3
+  elif grouping[a][1] == 'East Asian': adding -= 0.1
+  elif grouping[a][1] == 'Female': adding += 0.35
+  elif grouping[a][1] == 'Male': adding -= 0.3
+  elif grouping[a][1] == 'White': adding -= 0.25
+  tx = ax_age_alpha1.text(all_ages[-1]+0.5, w[-1]+adding, grouping[a][1], color=grouping[a][2], ha='left', va='center', bbox=dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.7, edgecolor=grouping[a][2]))
+  w = lowess(age_means_alpha2, all_ages, frac=0.35, return_sorted=False)
+  li = ax_age_alpha2.plot(all_ages, w, color=grouping[a][2], linestyle='-')
+  # li = ax_age_alpha2.fill_between(all_ages, w_up, w_low, color=grouping[a][2], alpha=0.3)
+  adding = 0
+  if grouping[a][1] == 'South Asian': adding -= 0.001
+  elif grouping[a][1] == 'East Asian': adding += 0.001
+  elif grouping[a][1] == 'Female': adding -= 0.005
+  elif grouping[a][1] == 'White': adding += 0.006
+  # elif grouping[a][1] == 'Male': adding += 0.002
+  tx = ax_age_alpha2.text(all_ages[-1]+0.5, w[-1]+adding, grouping[a][1], color=grouping[a][2], ha='left', va='center', bbox=dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.7, edgecolor=grouping[a][2]))
+  w = lowess(age_means_alpha3, all_ages, frac=0.35, return_sorted=False)
+  li = ax_age_alpha3.plot(all_ages, w, color=grouping[a][2], linestyle='-')
+  # li = ax_age_alpha3.fill_between(all_ages, w_up, w_low, color=grouping[a][2], alpha=0.3)
+  adding = 0
+  if grouping[a][1] == 'White': adding -= 0.015
+  elif grouping[a][1] == 'Female': adding -= 0.007
+  elif grouping[a][1] == 'East Asian': adding += 0.02
+  elif grouping[a][1] == 'South Asian': adding += 0.01
+  tx = ax_age_alpha3.text(all_ages[-1]+0.5, w[-1]+adding, grouping[a][1], color=grouping[a][2], ha='left', va='center', bbox=dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.7, edgecolor=grouping[a][2]))
+  #add confidence intervals? https://www.statsmodels.org/dev/examples/notebooks/generated/lowess.html
+
+plt.sca(ax_age_alpha1)
+ti = plt.title('H', fontweight='bold', loc='left'), plt.title("Alpha diversity:\nFaith's PD (FPD)", fontweight='bold'), plt.ylim([16, 22])#, plt.xlim([4.9, 18.99])
+al = plt.ylabel('Diversity'), plt.xlabel('Age (years)')
+
+plt.sca(ax_age_alpha2)
+ti = plt.title('I', fontweight='bold', loc='left'), plt.title("Alpha diversity:\nSimpson's evenness (SE)", fontweight='bold'), plt.ylim([0.09, 0.18])#, plt.xlim([4.9, 18.99])
+al = plt.ylabel(''), plt.xlabel('Age (years)')
+
+plt.sca(ax_age_alpha3)
+ti = plt.title('J', fontweight='bold', loc='left'), plt.title("Alpha diversity:\nSimpson's index (SI)", fontweight='bold'), plt.ylim([0.83, 0.95])#, plt.xlim([4.9, 18.99])
+al = plt.ylabel(''), plt.xlabel('Age (years)')
+
+plt.savefig(folder+'figures/beta_permanova_metadata_pcoa_alpha.png', dpi=600, bbox_inches='tight')
+#plt.show()
+```
+
+### Significant variables
+
+```{python}
+metrics = ['PC1', 'PC2', 'PC3']
+prop_explain = [0.6386125734929017, 0.3023029246310683, 0.05908450187603021]
+metrics_rename = ['PC1 ('+str(round(prop_explain[0]*100, 1))+'%)', 'PC2 ('+str(round(prop_explain[1]*100, 1))+'%)', 'PC3 ('+str(round(prop_explain[2]*100, 1))+'%)']
+pca = pd.read_csv(folder+'QIIME2/processing/phylo_rpca/ordination_pca.csv', index_col=0, header=0)
+md =  pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv', index_col=0, header=0)
+permanova = pd.read_csv(folder+'QIIME2/processing/permanova_all_vars_interaction.csv', index_col=0, header=0)
+
+variables = ['ethnicity', 'age', 'antibiotics', 'gender', 'HEFI', 'cur_msd_soc']
+variable_names = ['Ethnicity', 'Age', 'Antibiotics', 'Gender', 'HEFI', 'Social deprivation']
+colors = [colors_ethnicity, '', colors_antibiotics, colors_gender, '', '']
+
+fig = plt.figure(figsize=(12,12))
+rowspan = [3, 5, 2, 2, 5, 5]
+
+for m in range(len(metrics)):
+  #if m > 0: continue
+  start = 0
+  metric_ax = []
+  for v in range(len(variables)):
+    md_red = md[md[variables[v]].notnull()]
+    ax = plt.subplot2grid((22,6),(start,m), rowspan=rowspan[v])
+    metric_ax.append(ax)
+    plt.sca(ax)
+    if v == 0: ti = plt.title(metrics_rename[m], fontweight='bold')
+    start += rowspan[v]
+    if m == 0:
+      if v in [1, 4, 5]: yl = plt.ylabel(variable_names[v]+'\n($n$='+str(md_red.shape[0])+')', fontweight='bold')
+      else: yl = plt.ylabel(variable_names[v], fontweight='bold')
+    if variables[v] in ['ethnicity', 'antibiotics', 'gender']:
+      groups = set(md_red[variables[v]].values)
+      count = 0
+      yvals, ylabs = [], []
+      for group in groups:
+        this_group = md_red[md_red[variables[v]] == group]
+        this_group_pc = pca.loc[[m for m in this_group.index.values if m in pca.index.values], metrics[m]]
+        sc = ax.scatter(this_group_pc, np.random.normal(count, scale=0.08, size=len(this_group_pc)), alpha=0.1, color=colors[v][group], s=5)
+        box = ax.boxplot([this_group_pc], positions=[count], widths=0.6, showfliers=False, vert=False)
+        for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+        ap = yvals.append(count), ylabs.append(group+'\n($n$='+str(len(list(this_group_pc)))+')')
+        count += 1
+      if m == 0: ti = plt.yticks(yvals, ylabs)
+      else: plt.yticks([])
+    else:
+      group_vals = md_red.loc[[m for m in md_red.index.values if m in alpha.index.values], :]
+      alpha_red = pca.loc[group_vals.index.values, metrics[m]].values
+      sc = plt.scatter(alpha_red, group_vals[variables[v]].values, s=5, color='gray', alpha=0.1)
+      var = group_vals[variables[v]].values
+      rng = max(var)-min(var)
+      interval = rng/150
+      start_mean = min(var)
+      mean_var, mean_alpha, upper_alpha, lower_alpha = [], [], [], []
+      for a in range(150):
+        vars_range = [i for i in var if start_mean <= i <= start_mean+interval]
+        range_samples = group_vals[group_vals[variables[v]].isin(vars_range)]
+        if range_samples.shape[0] == 0:
+          start_mean += interval
+          continue
+        range_var = np.mean([start_mean, start_mean+interval])
+        range_vals = pca.loc[range_samples.index.values, metrics[m]].values
+        range_alpha_mean, range_alpha_std = np.mean(range_vals), np.std(range_vals)
+        ap = mean_var.append(range_var), mean_alpha.append(range_alpha_mean), upper_alpha.append(range_alpha_mean+range_alpha_std), lower_alpha.append(range_alpha_mean-range_alpha_std)
+        start_mean += interval
+      w = lowess(mean_alpha, mean_var, frac=0.35)
+      w_var, w_alp = [y[0] for y in w], [y[1] for y in w]
+      w_up = lowess(upper_alpha, mean_var, frac=0.35)
+      w_var_up, w_alp_up = [y[0] for y in w_up], [y[1] for y in w_up]
+      w_low = lowess(lower_alpha, mean_var, frac=0.35)
+      w_var_low, w_alp_low = [y[0] for y in w_low], [y[1] for y in w_low]
+      pl = plt.plot(w_alp, mean_var, color='red', linestyle='-')
+      fb = plt.fill_betweenx(mean_var, w_alp_low, w_alp_up, color='red', alpha=0.3)
+      if m != 0: plt.yticks([])
+  min_x, max_x = 100, 0
+  for ax in metric_ax:
+    plt.sca(ax)
+    xlim = plt.xlim()
+    if xlim[0] < min_x: min_x = xlim[0]
+    if xlim[1] > max_x: max_x = xlim[1]
+  count = 0
+  for ax in metric_ax:
+    plt.sca(ax)
+    xl = plt.xlim([min_x, max_x])
+    if count < 3: xt = plt.xticks([])
+    else: xt = plt.xlabel(metrics_rename[m])
+    count += 1
+      
+
+plt.savefig(folder+'figures/beta_significant_variables.png', bbox_inches='tight', dpi=600)
+```
+
+### Significant variables diet
+
+```{python}
+metrics = ['PC1', 'PC2', 'PC3']
+prop_explain = [0.6386125734929017, 0.3023029246310683, 0.05908450187603021]
+metrics_rename = ['PC1 ('+str(round(prop_explain[0]*100, 1))+'%)', 'PC2 ('+str(round(prop_explain[1]*100, 1))+'%)', 'PC3 ('+str(round(prop_explain[2]*100, 1))+'%)']
+pca = pd.read_csv(folder+'QIIME2/processing/phylo_rpca/ordination_pca.csv', index_col=0, header=0)
+md =  pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv', index_col=0, header=0)
+permanova = pd.read_csv(folder+'QIIME2/processing/permanova_all_vars_interaction.csv', index_col=0, header=0)
+
+variables = ['dsq6', 'dsq10', 'dsq13', 'dsq14', 'dsq16', 'dsq17', 'dsq18', 'dsq22']
+variable_names = ['Q6: dairy\nmilk', 'Q10: soda\nsugary drinks', 'Q13: fruit', 'Q14: vegetables', 'Q16: red meat', 'Q17: processed\nmeat', 'Q18: poultry', 'Q22: desserts/\nsweets']
+colors = ['gray', '#9b59b6', '#2980b9', '#1abc9c', '#27ae60', '#f1c40f', '#e67e22', '#c0392b', '#ec0cca']
+group_names = ['Never', 'Once per month', '2-3 times per month', 'Once per week', 'Twice per week', '3-4 times per week', '5-6 times per week', 'Once per day', '>2 times per day']
+
+fig = plt.figure(figsize=(12,12))
+rowspan = [5, 5, 5, 5, 5, 5, 5, 5]
+
+for m in range(len(metrics)):
+  #if m > 0: continue
+  start = 0
+  metric_ax = []
+  for v in range(len(variables)):
+    md_red = md[md[variables[v]].notnull()]
+    ax = plt.subplot2grid((40,6),(start,m), rowspan=rowspan[v])
+    metric_ax.append(ax)
+    plt.sca(ax)
+    if v == 0: ti = plt.title(metrics_rename[m], fontweight='bold')
+    start += rowspan[v]
+    if m == 0:
+      if v in [1, 4, 5]: yl = plt.ylabel(variable_names[v]+'\n($n$='+str(md_red.shape[0])+')', fontweight='bold')
+      else: yl = plt.ylabel(variable_names[v], fontweight='bold')
+    groups = sorted(list(set(md_red[variables[v]].values)))
+    count = 0
+    yvals, ylabs, xvals = [], [], []
+    for group in groups:
+        this_group = md_red[md_red[variables[v]] == group]
+        this_group_alpha = pca.loc[[m for m in this_group.index.values if m in pca.index.values], metrics[m]]
+        sc = ax.scatter(this_group_alpha, np.random.normal(count, scale=0.08, size=len(this_group_alpha)), alpha=0.1, color='gray', s=5)
+        ap = xvals.append(np.mean(this_group_alpha))
+        #box = ax.boxplot([this_group_alpha], positions=[count], widths=0.6, showfliers=False, vert=False)
+        #for item in ['boxes', 'whiskers', 'fliers', 'medians', 'caps']: bi = plt.setp(box[item], color='k')
+        ap = yvals.append(count), ylabs.append(group_names[int(group)]+' ($n$='+str(len(list(this_group_alpha)))+')')
+        count += 1
+    w = lowess(xvals, yvals, frac=0.25)
+    w_var, w_alp = [y[0] for y in w], [y[1] for y in w]
+    pl = plt.plot(w_alp, yvals, color='red', linestyle='-')
+    if m == 0: ti = plt.yticks(yvals, ylabs)
+    else: plt.yticks([])
+  min_x, max_x = 100, 0
+  for ax in metric_ax:
+    plt.sca(ax)
+    xlim = plt.xlim()
+    if xlim[0] < min_x: min_x = xlim[0]
+    if xlim[1] > max_x: max_x = xlim[1]
+  count = 0
+  for ax in metric_ax:
+    plt.sca(ax)
+    xl = plt.xlim([min_x, max_x])
+    if count < 7: xt = plt.xticks([])
+    else: xt = plt.xlabel(metrics_rename[m])
+    count += 1
+      
+
+plt.savefig(folder+'figures/beta_significant_variables_dsq.png', bbox_inches='tight', dpi=600)
+```
+
+## K-medeoids clustering
+
+```{python}
+diss = pd.read_csv(folder+'QIIME2/processing/phylo_rpca/distance-matrix.tsv', index_col=0, header=0, sep='\t')
+md =  pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv', index_col=0, header=0)
+
+kmin = 1
+kmax = 20
+dm = kmedoids.dynmsc(diss, kmax, kmin)
+print("Optimal number of clusters according to the Medoid Silhouette:", dm.bestk)
+print("Medoid Silhouette over range of k:", dm.losses)
+print("Range of k:", dm.rangek)
+
+km = kmedoids.KMedoids(2, method='fasterpam')
+c = km.fit(diss)
+print("Loss is:", c.inertia_)
+print(c.labels_)
+c_labels = list(c.labels_)
+labels_group1 = [diss.index.values[l] for l in range(len(diss.index.values)) if c_labels[l] == 0]
+labels_group2 = [diss.index.values[l] for l in range(len(diss.index.values)) if c_labels[l] == 1]
+
+print(np.mean(md.loc[[l for l in labels_group1 if l in md.index.values], 'age'].values))
+print(np.mean(md.loc[[l for l in labels_group2 if l in md.index.values], 'age'].values))
+print(list(md.loc[[l for l in labels_group1 if l in md.index.values], 'gender'].values).count('Female'), len(labels_group1))
+print(list(md.loc[[l for l in labels_group2 if l in md.index.values], 'gender'].values).count('Female'), len(labels_group2))
+print(list(md.loc[[l for l in labels_group1 if l in md.index.values], 'ethnicity'].values).count('White'), len(labels_group1))
+print(list(md.loc[[l for l in labels_group2 if l in md.index.values], 'ethnicity'].values).count('White'), len(labels_group2))
+```
+
+## Differential abundance
+
+Initial filtering:
+```{python}
+ft = pd.read_csv(folder+'files/feature-table-metadata-processed.csv', index_col=0, header=0)
+tax = pd.read_csv(folder+'QIIME2/deblur_output_exported/taxonomy.tsv', index_col=0, header=0, sep='\t')
+
+tax = tax.loc[ft.index.values, :]
+
+genus_rename = {}
+for row in tax.index.values:
+  tax_classif = tax.loc[row, 'taxonomy']
+  if 'g__' in tax_classif:
+    tax_classif = 'g__'+tax_classif.split(';g__')[1]
+    if ';' in tax_classif: tax_classif = tax_classif.split(';')[0]
+  else:
+    tax_classif = tax_classif.split(';')
+    tax_classif = 'Unclassified '+tax_classif[-1]
+  genus_rename[row] = tax_classif
+
+ft = ft.rename(index=genus_rename)
+ft = ft.groupby(by=ft.index).sum()
+ft.to_csv(folder+'files/genus_feature-table-metadata-processed.csv')
+```
+
+1. Look at variables individually with only participants that have information
+2. Look at all variables with individuals that have information for all
+
+MaAsLin3:
+- Samples without all metadata variables will be dropped
+
+RadEMU:
+
+ANCOM-BC2:
+
+ALDEx2:
+
+LOCOM:
+
+## Machine learning
+
+### Random Forests
+
+Genus level:
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv', index_col=0, header=0)
+ft = pd.read_csv(folder+'files/genus_feature-table-metadata-processed.csv', index_col=0, header=0)
+#ft = pd.read_csv(folder+'files/feature-table-metadata-processed.csv', index_col=0, header=0)
+
+variables = ['gender', 'age', 'ethnicity', 'HEFI', 'cur_msd_mat', 'cur_msd_soc', 'antibiotics', 'physical_mental_condition']
+param_dist = {'n_estimators': randint(50,1000), 'max_depth': randint(1,20)}
+classification = ['gender', 'ethnicity', 'antibiotics', 'physical_mental_condition']
+
+for variable in variables:
+  #if variable != 'ethnicity': continue
+  md_red = md[md[variable].notnull()]
+  md_red = md_red.loc[[s for s in md_red.index.values if s in ft.columns], :]
+  ft_red = ft.loc[:, md_red.index.values]
+  ft_red = ft_red[ft_red.max(axis=1) > 0]
+  md_red.to_csv(folder+'intermediate/random_forest/metadata_'+variable+'.csv')
+  ft_red.to_csv(folder+'intermediate/random_forest/ft-genus_'+variable+'.csv')
+  best_best_rf = [0, 'forest']
+  for a in range(1):
+    if variable in classification: 
+      rf = RandomForestClassifier()#n_estimators=10)
+      if len(set(md_red.loc[:, variable].values)) > 2:
+        min_size = 5000
+        for group in set(md_red.loc[:, variable].values):
+          cnt = list(md_red.loc[:, variable].values).count(group)
+          if cnt < min_size:
+            min_size = cnt
+        new_samples = []
+        order = md_red.index.values
+        random.shuffle(order)
+        for group in set(md_red.loc[:, variable].values):
+          this_group = md_red.loc[order, :]
+          this_group = this_group[this_group[variable] == group].head(min_size)
+          new_samples.extend(list(this_group.index.values))
+        new_md_red = md_red.loc[new_samples, :]
+      else:
+        new_md_red = md_red
+    else:
+      rf = RandomForestRegressor()#n_estimators=10, oob_score=True)
+      new_md_red = md_red
+    order = new_md_red.index.values
+    random.shuffle(order)
+    #mdat = new_md_red.loc[order, [variable]]
+    mdat = pd.read_csv(folder+'files/metadata_microbiome_only_plus_diet_ses_physical_mental_no_null.csv', index_col=0, header=0).loc[order, [variable]]
+    ft_using = ft_red.loc[:, order].transpose()
+    train_size = int(len(order)*0.8)
+    X_train_samples, X_test_samples = order[:train_size], order[train_size:]
+    X_train, X_test, y_train, y_test = ft_using.loc[X_train_samples, :], ft_using.loc[X_test_samples, :], mdat.loc[X_train_samples, variable].values, mdat.loc[X_test_samples, variable].values
+    rand_search = RandomizedSearchCV(rf, param_distributions = param_dist, n_iter=5, cv=5)
+    fit = rand_search.fit(X_train, y_train)
+    best_rf = rand_search.best_estimator_
+    best_rf = rf.fit(X_train, y_train)
+    y_pred = best_rf.predict(X_test)
+    rf_score = best_rf.score(X_test, y_test)
+    feat_imp = best_rf.feature_importances_
+    if variable in classification:
+      accuracy = accuracy_score(y_test, y_pred)
+      if len(set(mdat.loc[X_test_samples, variable].values)) > 2:
+        print(variable, accuracy, rf_score)
+      else:
+        y_pred_prob = best_rf.predict_proba(X_test)[:, 1]
+        auc_score = roc_auc_score(y_test, y_pred_prob)
+        # if auc_score > best_best_rf[0]:
+        #   best_best_rf[0] = auc_score
+        #   best_best_rf[1] = best_rf
+        print(variable, accuracy, rf_score, auc_score)
+    else:
+      predictions = best_rf.predict(X_test)
+      mse = mean_squared_error(y_test, predictions)
+      r2 = r2_score(y_test, predictions)
+      try:
+        print(variable, rf_score, best_rf.oob_score_, mse, r2)
+      except:
+        print(variable, rf_score, mse, r2)
+  
+```
+
+
