@@ -36,6 +36,8 @@ py_require("statsmodels")
 py_require("scikit-bio")
 py_require("ete3")
 py_require("openpyxl")
+py_require("seaborn")
+py_require("scikit-posthocs")
 #Sys.setenv(UV_OFFLINE=1)
 ```
 
@@ -57,7 +59,9 @@ from mpl_toolkits.axes_grid1.inset_locator import inset_axes
 from skbio.diversity import get_alpha_diversity_metrics, get_beta_diversity_metrics, alpha_diversity, beta_diversity
 from skbio import read
 from skbio.tree import TreeNode
-from skbio.stats import ordination
+from skbio.stats import ordination, subsample_counts
+from skbio.diversity.alpha import observed_features
+import seaborn as sns
 import numpy as np
 from numpy.polynomial import Polynomial
 import os
@@ -79,10 +83,14 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 from sklearn.model_selection import train_test_split, RandomizedSearchCV
 import statsmodels.api as sm
 from statsmodels.formula.api import ols
+from statsmodels.stats.mediation import Mediation
+from statsmodels.stats.outliers_influence import variance_inflation_factor
+from statsmodels.stats.multitest import multipletests
 lowess = sm.nonparametric.lowess
 from Bio import Phylo, SeqIO
 import pickle
 from ete3 import Tree
+import scikit_posthocs as sp
 
 folder_all = '/Users/robynwright/Dropbox/Langille_Lab_postdoc/Current_projects/SfS_SickKids/'
 folder_atpath = '/Users/robynwright/Dropbox/Langille_Lab_postdoc/Current_projects/SfS_SickKids/atlantic_PATH_reprocess/'
@@ -627,7 +635,7 @@ Double check participants with latest S2pheno release:
 ```{python}
 s2pheno = pd.read_csv(folder_all+'S2pheno_2025-11-06.csv', index_col=1, header=0)
 md = pd.read_csv(folder+'files/metadata_microbiome_participants.csv', index_col=0, header=0)
-env_variables = ['cur_msd_mat', 'cur_msd_soc', 'cur_gta', 'cur_ior', 'cur_gmn_mean', 'cur_pm25_mean', 'cur_omarg_hh', 'cur_omarg_mat', 'cur_omarg_labour', 'cur_omarg_race', 'birth_gta', 'birth_ior', 'birth_gmn_mean', 'birth_pm25_mean', 'birth_omarg_hh', 'birth_omarg_mat', 'birth_omarg_labour', 'birth_omarg_race', 'birth_msd_mat', 'birth_msd_soc', 'utero_gta', 'utero_ior', 'utero_gmn_mean', 'utero_pm25_mean', 'utero_omarg_hh', 'utero_omarg_mat', 'utero_omarg_labour', 'utero_omarg_race', 'utero_msd_mat', 'utero_msd_soc', 'sch_gta', 'sch_ior', 'sch_gmn_mean', 'sch_pm25_mean', 'sch_omarg_hh', 'sch_omarg_mat', 'sch_omarg_labour', 'sch_omarg_race', 'sch_msd_mat', 'sch_msd_soc']
+env_variables = ['cur_msd_mat', 'cur_msd_soc', 'cur_gta', 'cur_ior', 'cur_gmn_mean', 'cur_pm25_mean', 'cur_omarg_hh', 'cur_omarg_mat', 'cur_omarg_labour', 'cur_omarg_race', 'birth_gta', 'birth_ior', 'birth_gmn_mean', 'birth_pm25_mean', 'birth_omarg_hh', 'birth_omarg_mat', 'birth_omarg_labour', 'birth_omarg_race', 'birth_msd_mat', 'birth_msd_soc', 'utero_gta', 'utero_ior', 'utero_gmn_mean', 'utero_pm25_mean', 'utero_omarg_hh', 'utero_omarg_mat', 'utero_omarg_labour', 'utero_omarg_race', 'utero_msd_mat', 'utero_msd_soc', 'sch_gta', 'sch_ior', 'sch_gmn_mean', 'sch_pm25_mean', 'sch_omarg_hh', 'sch_omarg_mat', 'sch_omarg_labour', 'sch_omarg_race', 'sch_msd_mat', 'sch_msd_soc', 'study_date']
 #add no2 to this if it gets added later
 
 rename = {}
@@ -639,6 +647,12 @@ s2pheno = s2pheno.rename(index=rename)
 s2pheno = s2pheno.loc[md.index.values, :]
 s2pheno.to_csv(folder+'files/S2pheno_2025-11-06_microbiome_participants.csv')
 md.loc[:, env_variables] = s2pheno.loc[:, env_variables]
+
+md['study_year'] = ''
+for row in md.index.values:
+  study_date = md.loc[row, 'study_date']
+  year = study_date.split('-')[0]
+  md.loc[row, 'study_year'] = year
 
 md.to_csv(folder+'files/metadata_microbiome_participants_s2pheno.csv')
 
@@ -782,6 +796,9 @@ tax = pd.read_csv(folder_initial+"QIIME2/deblur_output_exported/taxonomy.csv", i
 ft = pd.read_csv(folder+'files/feature-table_min2000_with_metadata.csv', index_col=0, header=0)
 tax = tax.loc[ft.index.values, :]
 
+tax_w_conf = pd.read_csv(folder_initial+"QIIME2/deblur_output_exported/taxonomy.tsv", index_col=0, header=0, sep='\t')
+tax_w_conf = tax_w_conf.loc[tax.index.values, ['Confidence']]
+
 tax['ASV'] = ''
 count = 1
 for row in tax.index.values:
@@ -796,7 +813,8 @@ for row in tax.index.values:
   tax.loc[row, ['Kingdom', 'Phylum', 'Class', 'Order', 'Family', 'Genus', 'Species']] = this_tax
   tax.loc[row, 'ASV'] = 'ASV'+str(count).zfill(4)
   count += 1
-  
+
+tax['Confidence'] = tax_w_conf.loc[tax.index.values, 'Confidence']
 tax.to_csv(folder+'files/taxonomy.csv')
 ```
 
@@ -908,6 +926,201 @@ ft_genus['Mean relative abundance'] = sums['Mean relative abundance']
 
 ft_genus.to_csv(folder+'files/supplementary_feature_table_genus_with_tax.csv')
 
+```
+
+# Get other beta diversity metrics
+
+```{python}
+ft = pd.read_csv(folder+'files/feature-table_min2000_with_metadata.csv', header=0, index_col=0)
+ft = ft.divide(ft.sum(axis=0), axis=1).multiply(100)
+
+X = ft.transpose().iloc[0:].values
+similarities = np.nan_to_num(distance.cdist(X, X, 'braycurtis'))
+similarities = pd.DataFrame(similarities, index=ft.columns, columns=ft.columns)
+similarities.to_csv(folder+'files/beta_diversity/Braycurtis.csv')
+```
+
+```{R}
+df <- read.csv(paste(py$folder, "files/feature-table_min2000_with_metadata.csv", sep=""), header=T, stringsAsFactors = FALSE, check.names = FALSE)
+df_num = data.matrix(df[,2:4813]) 
+rownames(df_num) = df[,1]
+DF = otu_table(df_num, taxa_are_rows = TRUE) 
+
+phy_tree <- read_tree("/Users/robynwright/Dropbox/Langille_Lab_postdoc/Current_projects/SfS_SickKids/analysis_all_samples/QIIME2/deblur_output_exported/tree.nwk")
+
+physeq = phyloseq(DF, phy_tree) 
+
+distance_wuf <- phyloseq::distance(physeq, method="unifrac", weighted=T) 
+distance_matrix <- as.matrix(distance_wuf)
+write.csv(distance_matrix, paste(py$folder, "files/beta_diversity/WeightedUnifrac.csv", sep=""))
+
+distance_uwuf <- phyloseq::distance(physeq, method="unifrac", weighted=F) 
+distance_matrix <- as.matrix(distance_uwuf)
+write.csv(distance_matrix, paste(py$folder, "files/beta_diversity/UnweightedUnifrac.csv", sep=""))
+```
+
+### Procrustes
+
+Filter feature table for phylogenetic RPCA:
+```{python}
+ft = pd.read_csv(folder+'files/feature-table_min2000_with_metadata.csv', index_col=0, header=0)
+ft_prev = ft.copy(deep=True)
+ft_prev[ft_prev > 1] = 1
+ft_prev['Prevalence'] = ft_prev.mean(axis=1)
+ft_prev_red = ft_prev[ft_prev['Prevalence'] >= 0.01]
+
+ft_prev_red.to_csv(folder+'files/feature-table_min2000_with_metadata_1pc_prev.tsv', sep='\t')
+
+all_values = []
+
+for row in ft_prev_red.index.values:
+  all_values.extend(list(ft_prev_red.loc[row, :].values))
+  
+zero_count = all_values.count(0)
+zero_prop = zero_count/len(all_values)
+zero_perc = zero_prop*100
+zero_perc
+
+tax = pd.read_csv('/Users/robynwright/Dropbox/Langille_Lab_postdoc/Current_projects/SfS_SickKids/analysis_all_samples/QIIME2/deblur_output_exported/taxonomy.tsv', index_col=0, header=0, sep='\t')
+tax = tax.loc[ft_prev_red.index.values, :]
+tax.to_csv(folder+'files/taxonomy_min2000_1pc_prev.tsv', sep='\t')
+
+ft_100 = ft[ft.sum(axis=1) >= 100]
+
+all_values = []
+
+for row in ft_100.index.values:
+  all_values.extend(list(ft_100.loc[row, :].values))
+  
+zero_count = all_values.count(0)
+zero_prop = zero_count/len(all_values)
+zero_perc = zero_prop*100
+zero_perc
+
+ft_100.to_csv(folder+'files/feature-table_min2000_with_metadata_100_reads.tsv', sep='\t')
+tax = pd.read_csv('/Users/robynwright/Dropbox/Langille_Lab_postdoc/Current_projects/SfS_SickKids/analysis_all_samples/QIIME2/deblur_output_exported/taxonomy.tsv', index_col=0, header=0, sep='\t')
+tax = tax.loc[ft_prev_red.index.values, :]
+tax.to_csv(folder+'files/taxonomy_min2000_100_reads.tsv', sep='\t')
+
+```
+
+Gemelli:
+```{bash, eval=FALSE}
+conda activate qiime2-amplicon-2024.10
+mkdir phylo_rpca
+
+qiime tools import \
+  --type 'FeatureData[Taxonomy]' \
+  --input-path taxonomy_min2000_1pc_prev.tsv \
+  --output-path taxonomy_min_2000_1pc_prev.qza
+
+biom convert -i feature-table_min2000_with_metadata_1pc_prev.tsv -o feature-table_min2000_with_metadata_1pc_prev.biom --table-type="OTU table" --to-hdf5
+qiime tools import \
+  --input-path feature-table_min2000_with_metadata_1pc_prev.biom \
+  --type 'FeatureTable[Frequency]' \
+  --input-format BIOMV210Format \
+  --output-path feature-table_min2000_with_metadata_1pc_prev.qza
+
+qiime dev refresh-cache
+pip install gemelli
+qiime gemelli phylogenetic-rpca-with-taxonomy \
+    --i-table feature-table_min2000_with_metadata_1pc_prev.qza \
+    --i-phylogeny asvs-tree.qza \
+    --m-taxonomy-file taxonomy_min_2000_1pc_prev.qza \
+    --p-min-feature-count 0 \
+    --p-min-sample-count 0 \
+    --o-biplot phylo_rpca/phylo-ordination.qza \
+    --o-distance-matrix phylo_rpca/phylo-distance.qza \
+    --o-counts-by-node-tree phylo_rpca/phylo-tree.qza \
+    --o-counts-by-node phylo_rpca/phylo-table.qza \
+    --o-t2t-taxonomy phylo_rpca/phylo-taxonomy.qza
+    
+qiime tools export \
+  --input-path phylo_rpca/phylo-ordination.qza \
+  --output-path phylo_rpca
+
+qiime tools export \
+  --input-path phylo_rpca/phylo-distance.qza \
+  --output-path phylo_rpca
+  
+mv phylo_rpca/distance-matrix.tsv phylo_rpca/phylo_rpca_filtered.tsv
+  
+###############
+
+qiime tools import \
+  --type 'FeatureData[Taxonomy]' \
+  --input-path taxonomy_min2000_100_reads.tsv \
+  --output-path taxonomy_min_2000_100_reads.qza
+
+biom convert -i feature-table_min2000_with_metadata_100_reads.tsv -o feature-table_min2000_with_metadata_100_reads.biom --table-type="OTU table" --to-hdf5
+qiime tools import \
+  --input-path feature-table_min2000_with_metadata_100_reads.biom \
+  --type 'FeatureTable[Frequency]' \
+  --input-format BIOMV210Format \
+  --output-path feature-table_min2000_with_metadata_100_reads.qza
+  
+mkdir phylo_rpca_100_reads
+
+qiime gemelli phylogenetic-rpca-with-taxonomy \
+    --i-table feature-table_min2000_with_metadata_100_reads.qza \
+    --i-phylogeny asvs-tree.qza \
+    --m-taxonomy-file taxonomy_min_2000_100_reads.qza \
+    --p-min-feature-count 0 \
+    --p-min-sample-count 0 \
+    --o-biplot phylo_rpca_100_reads/phylo-ordination.qza \
+    --o-distance-matrix phylo_rpca_100_reads/phylo-distance.qza \
+    --o-counts-by-node-tree phylo_rpca_100_reads/phylo-tree.qza \
+    --o-counts-by-node phylo_rpca_100_reads/phylo-table.qza \
+    --o-t2t-taxonomy phylo_rpca_100_reads/phylo-taxonomy.qza
+    
+qiime tools export \
+  --input-path phylo_rpca_100_reads/phylo-ordination.qza \
+  --output-path phylo_rpca_100_reads
+
+qiime tools export \
+  --input-path phylo_rpca_100_reads/phylo-distance.qza \
+  --output-path phylo_rpca_100_reads
+  
+mv phylo_rpca_100_reads/distance-matrix.tsv phylo_rpca_100_reads/phylo_rpca_filtered_100_reads.tsv
+```
+
+```{R, eval=FALSE}
+#Vulcan
+#conda activate /home/robyn/anaconda3/envs/r-phyloseq
+library(vegan)
+
+wuf = read.csv("files/beta_diversity/WeightedUnifrac.csv", header=TRUE, row.names = 1, stringsAsFactors = FALSE)
+uwuf = read.csv("files/beta_diversity/UnweightedUnifrac.csv", header=TRUE, row.names = 1, stringsAsFactors = FALSE)
+bc = read.csv("files/beta_diversity/Braycurtis.csv", header=TRUE, row.names = 1, stringsAsFactors = FALSE)
+rpca = read.csv("files/beta_diversity/phylo_rpca_distance.csv", header=TRUE, row.names = 1, stringsAsFactors = FALSE)
+rpca_filt = read.csv("files/beta_diversity/phylo_rpca_filtered.tsv", sep='\t', header=TRUE, row.names = 1, stringsAsFactors = FALSE)
+rpca_filt_100 = read.csv("files/beta_diversity/phylo_rpca_filtered_100_reads.tsv", sep='\t', header=TRUE, row.names = 1, stringsAsFactors = FALSE)
+
+samples = colnames(bc)
+wuf = wuf[samples,samples]
+uwuf = uwuf[samples,samples]
+bc = bc[samples,samples]
+rpca = rpca[samples,samples]
+rpca_filt = rpca_filt[samples,samples]
+rpca_filt_100 = rpca_filt_100[samples,samples]
+
+# rpca_bc = protest(rpca, bc, scores = "sites", permutations = how(nperm = 999))
+# print(rpca_bc)
+# rpca_wuf = protest(rpca, wuf, scores = "sites", permutations = how(nperm = 999))
+# print(rpca_wuf)
+# rpca_uwuf = protest(rpca, uwuf, scores = "sites", permutations = how(nperm = 999))
+# print(rpca_uwuf)
+
+rpca_bc <- mantel(rpca, bc, method = "pearson", permutations = 999, parallel = 24)
+print(rpca_bc)
+rpca_wuf <- mantel(rpca, wuf, method = "pearson", permutations = 999, parallel = 24)
+print(rpca_wuf)
+rpca_uwuf <- mantel(rpca, uwuf, method = "pearson", permutations = 999, parallel = 24)
+print(rpca_uwuf)
+rpca_filt <- mantel(rpca, rpca_filt, method = "pearson", permutations = 999, parallel = 24)
+print(rpca_filt)
+rpca_filt_100 <- mantel(rpca, rpca_filt_100, method = "pearson", permutations = 999, parallel = 24)
+print(rpca_filt_100)
 ```
 
 # Get basic variables info
@@ -1039,6 +1252,7 @@ md = md[new_list,]
 md$gender = as.character(md$gender)
 md$parent2 = as.character(md$parent2)
 md$family_id = as.character(md$family_id)
+md$study_year = as.factor(md$study_year)
 
 variables = c("family_id", "gender", "age", "ethnicity", "physical_mental_condition", "cur_msd_soc", "cur_msd_mat", "HEFI", "antibiotics", 'diet_richness_monthly', 'diet_richness_weekly', 'diet_richness_daily', "strict_diet", "dsq2", "dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq9", "dsq10", "dsq11", "dsq12", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23", "houseincome", "edu_parent1", "parent2", "edu_parent2")
 env_variables = c('cur_gta', 'cur_rural', 'cur_ior', 'cur_gmn_max', 'cur_amn_max', 'cur_amn_mean', 'cur_no2_mean', 'cur_pm25_mean', 'cur_omarg_hh', 'cur_omarg_mat', 'cur_omarg_labour', 'cur_omarg_race', 'cur_msd_mat', 'cur_msd_soc', 'birth_gta', 'birth_rural', 'birth_ior', 'birth_gmn_max', 'birth_amn_max', 'birth_amn_mean', 'birth_pm25_mean', 'birth_omarg_hh', 'birth_omarg_mat', 'birth_omarg_labour', 'birth_omarg_race', 'birth_msd_mat', 'birth_msd_soc', 'utero_gta', 'utero_rural', 'utero_ior', 'utero_gmn_max', 'utero_amn_max', 'utero_amn_mean', 'utero_pm25_mean', 'utero_omarg_hh', 'utero_omarg_mat', 'utero_omarg_labour', 'utero_omarg_race', 'utero_msd_mat', 'utero_msd_soc', 'sch_gta', 'sch_rural', 'sch_ior', 'sch_gmn_max', 'sch_amn_max', 'sch_amn_mean', 'sch_pm25_mean', 'sch_omarg_hh', 'sch_omarg_mat', 'sch_omarg_labour', 'sch_omarg_race', 'sch_msd_mat', 'sch_msd_soc')
@@ -1069,6 +1283,9 @@ write.csv(permanova_basic_added_margin, 'files/beta_stats/permanova_basic_added_
 
 permanova_basic_added_margin <- adonis2(dm_df ~ md$gender + md$age + md$ethnicity + md$physical_mental_condition, data=dm_df, parallel=48, by="margin", permutations=999, strata=md$family_id)
 write.csv(permanova_basic_added_margin, 'files/beta_stats/permanova_basic_added_margin_strata.csv')
+
+permanova_basic_added_margin <- adonis2(dm_df ~ md$gender + md$age + md$ethnicity + md$physical_mental_condition + md$study_year, data=dm_df, parallel=48, by="margin", permutations=999, strata=md$family_id)
+write.csv(permanova_basic_added_margin, 'files/beta_stats/permanova_basic_added_margin_strata_year.csv')
 
 permanova_deprivation_added_margin <- adonis2(dm_df ~ md$family_id + md$gender + md$age + md$ethnicity + md$physical_mental_condition + md$cur_msd_mat + md$cur_msd_soc, data=dm_df, parallel=48, by="margin", permutations=999, na.action=na.exclude)
 write.csv(permanova_deprivation_added_margin, 'files/beta_stats/permanova_deprivation_added_margin.csv')
@@ -1504,8 +1721,10 @@ for (i in 1:length(metrics)) {
     table = read.csv(paste(py$folder, "intermediate/stats_testing_", metrics[i], ".csv", sep=""))
     table_no_ab = read.csv(paste(py$folder, "intermediate/stats_testing_", metrics[i], "_no_antibiotics.csv", sep=""))
     table$gender = as.character(table$gender)
+    table = table[table$gender %in% c("1","2"), ]
     table$family_id = as.character(table$family_id)
     table_no_ab$gender = as.character(table_no_ab$gender)
+    table_no_ab = table_no_ab[table_no_ab$gender %in% c("1","2"), ]
     table_no_ab$family_id = as.character(table_no_ab$family_id)
     for (v in 1:length(variables)) {
       variable = variables[v]
@@ -1513,36 +1732,34 @@ for (i in 1:length(metrics)) {
       mod = aov(formula, data=table)
       aov_summary <- summary(mod)
       aov_table <- as.data.frame(aov_summary[[1]])
-      write.csv(aov_table, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_univariate_", variable, ".csv", sep=""), row.names = TRUE)
+      write.csv(aov_table, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_univariate_", variable, "_noTGD.csv", sep=""), row.names = TRUE)
       if (variables[v] %in% c("gender", "ethnicity", "strict_diet")) {
         posthoc_res = TukeyHSD(mod, variable)
         posthoc_res = as.data.frame(posthoc_res[[1]])
-        write.csv(posthoc_res, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_univariate_", variable, "_posthoc.csv", sep=""), row.names = TRUE)
+        write.csv(posthoc_res, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_univariate_", variable, "_posthoc_noTGD.csv", sep=""), row.names = TRUE)
       }
     }
-#     basic = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + Error(family_id), data=table)
-#     # aov_summary <- summary(basic)
-#     # aov_table <- as.data.frame(aov_summary[[1]])
-#     # write.csv(aov_table, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_basic.csv", sep=""), row.names = TRUE)
-#     tidy_aov_df <- tidy(basic)
-#     write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_basic.csv", sep=""), row.names = TRUE)
-#     basic = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition, data=table)
-#     posthoc_ethnicity = TukeyHSD(basic, "ethnicity")
-#     posthoc_gender = TukeyHSD(basic, "gender")
-#     posthoc_ethnicity <- as.data.frame(posthoc_ethnicity$ethnicity)
-#     posthoc_gender <- as.data.frame(posthoc_gender$gender)
-#     write.csv(posthoc_ethnicity, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_basic_posthoc_ethnicity.csv", sep=""), row.names = TRUE)
-#     write.csv(posthoc_gender, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_basic_posthoc_gender.csv", sep=""), row.names = TRUE)
-#     
-# ?aov
-#     
-    # dep_red = table[, c("Diversity", "gender", "age", "ethnicity", "physical_mental_condition", "cur_msd_soc", "cur_msd_mat", "cur_gta", "cur_ior", "cur_gmn_mean", "cur_pm25_mean", "family_id")]
-    # dep_red = table[complete.cases(dep_red),]
-    # deprivation = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + cur_msd_soc + cur_msd_mat + cur_gta + cur_ior + cur_gmn_mean + cur_pm25_mean + Error(family_id), data=dep_red)
-    # # aov_summary <- summary(deprivation)
-    # # aov_table <- as.data.frame(aov_summary[[1]])
-    # tidy_aov_df <- tidy(deprivation)
-    # write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_deprivation.csv", sep=""), row.names = TRUE)
+    basic = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + Error(family_id), data=table)
+    # aov_summary <- summary(basic)
+    # aov_table <- as.data.frame(aov_summary[[1]])
+    # write.csv(aov_table, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_basic.csv", sep=""), row.names = TRUE)
+    tidy_aov_df <- tidy(basic)
+    write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_basic_noTGD.csv", sep=""), row.names = TRUE)
+    basic = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition, data=table)
+    posthoc_ethnicity = TukeyHSD(basic, "ethnicity")
+    posthoc_gender = TukeyHSD(basic, "gender")
+    posthoc_ethnicity <- as.data.frame(posthoc_ethnicity$ethnicity)
+    posthoc_gender <- as.data.frame(posthoc_gender$gender)
+    write.csv(posthoc_ethnicity, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_basic_posthoc_ethnicity_noTGD.csv", sep=""), row.names = TRUE)
+    write.csv(posthoc_gender, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_basic_posthoc_gender_noTGD.csv", sep=""), row.names = TRUE)
+
+    dep_red = table[, c("Diversity", "gender", "age", "ethnicity", "physical_mental_condition", "cur_msd_soc", "cur_msd_mat", "cur_gta", "cur_ior", "cur_gmn_mean", "cur_pm25_mean", "family_id")]
+    dep_red = table[complete.cases(dep_red),]
+    deprivation = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + cur_msd_soc + cur_msd_mat + cur_gta + cur_ior + cur_gmn_mean + cur_pm25_mean + Error(family_id), data=dep_red)
+    # aov_summary <- summary(deprivation)
+    # aov_table <- as.data.frame(aov_summary[[1]])
+    tidy_aov_df <- tidy(deprivation)
+    write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_deprivation_noTGD.csv", sep=""), row.names = TRUE)
     
     dep_red_all = table[, c("Diversity", "gender", "age", "ethnicity", "physical_mental_condition", "cur_msd_soc", "cur_msd_mat", "cur_gta", "cur_ior", "cur_gmn_mean", "cur_pm25_mean", "sch_msd_soc", "sch_msd_mat", "sch_gta", "sch_ior", "sch_gmn_mean", "sch_pm25_mean", "utero_msd_soc", "utero_msd_mat", "utero_gta", "utero_ior", "utero_gmn_mean", "utero_pm25_mean", "family_id")]
     dep_red_all = table[complete.cases(dep_red_all),]
@@ -1550,39 +1767,39 @@ for (i in 1:length(metrics)) {
     # aov_summary <- summary(deprivation)
     # aov_table <- as.data.frame(aov_summary[[1]])
     tidy_aov_df <- tidy(deprivation_all)
-    write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_deprivation_all.csv", sep=""), row.names = TRUE)
+    write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_deprivation_all_noTGD.csv", sep=""), row.names = TRUE)
     
-    # dep_omarg_red = table[, c("Diversity", "gender", "age", "ethnicity", "physical_mental_condition", "cur_gta", "cur_ior", "cur_gmn_mean", "cur_pm25_mean", "cur_omarg_hh", "cur_omarg_mat", "cur_omarg_labour", "cur_omarg_race", "family_id")]
-    # dep_omarg_red = table[complete.cases(dep_omarg_red),]
-    # deprivation_omarg = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + cur_omarg_hh + cur_omarg_mat + cur_omarg_labour + cur_omarg_race + cur_gta + cur_ior + cur_gmn_mean + cur_pm25_mean + Error(family_id), data=dep_omarg_red)
-    # # aov_summary <- summary(deprivation)
-    # # aov_table <- as.data.frame(aov_summary[[1]])
-    # tidy_aov_df <- tidy(deprivation_omarg)
-    # write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_deprivation_omarg.csv", sep=""), row.names = TRUE)
+    dep_omarg_red = table[, c("Diversity", "gender", "age", "ethnicity", "physical_mental_condition", "cur_gta", "cur_ior", "cur_gmn_mean", "cur_pm25_mean", "cur_omarg_hh", "cur_omarg_mat", "cur_omarg_labour", "cur_omarg_race", "family_id")]
+    dep_omarg_red = table[complete.cases(dep_omarg_red),]
+    deprivation_omarg = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + cur_omarg_hh + cur_omarg_mat + cur_omarg_labour + cur_omarg_race + cur_gta + cur_ior + cur_gmn_mean + cur_pm25_mean + Error(family_id), data=dep_omarg_red)
+    # aov_summary <- summary(deprivation)
+    # aov_table <- as.data.frame(aov_summary[[1]])
+    tidy_aov_df <- tidy(deprivation_omarg)
+    write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_deprivation_omarg_noTGD.csv", sep=""), row.names = TRUE)
     
-    # diet_red = table[, c("Diversity", "gender", "age", "ethnicity", "physical_mental_condition", "family_id", "HEFI", "antibiotics", 'diet_richness_monthly', 'diet_richness_weekly', 'diet_richness_daily', "strict_diet", "dsq2", "dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq9", "dsq10", "dsq11", "dsq12", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23")]
-    # diet_red = table[complete.cases(diet_red),]
-    # diet = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + HEFI + antibiotics + diet_richness_monthly + diet_richness_weekly + diet_richness_daily + strict_diet + dsq2 + dsq4 + dsq5 + dsq6 + dsq7 + dsq8 + dsq9 + dsq10 + dsq11 + dsq12 + dsq13 + dsq14 + dsq15 + dsq16 + dsq17 + dsq18 + dsq19 + dsq20 + dsq21 + dsq22 + dsq23 + Error(family_id), data=diet_red)
-    # # aov_summary <- summary(diet)
-    # # aov_table <- as.data.frame(aov_summary[[1]])
-    # tidy_aov_df <- tidy(diet)
-    # write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_diet.csv", sep=""), row.names = TRUE)
+    diet_red = table[, c("Diversity", "gender", "age", "ethnicity", "physical_mental_condition", "family_id", "HEFI", "antibiotics", 'diet_richness_monthly', 'diet_richness_weekly', 'diet_richness_daily', "strict_diet", "dsq2", "dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq9", "dsq10", "dsq11", "dsq12", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23")]
+    diet_red = table[complete.cases(diet_red),]
+    diet = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + HEFI + antibiotics + diet_richness_monthly + diet_richness_weekly + diet_richness_daily + strict_diet + dsq2 + dsq4 + dsq5 + dsq6 + dsq7 + dsq8 + dsq9 + dsq10 + dsq11 + dsq12 + dsq13 + dsq14 + dsq15 + dsq16 + dsq17 + dsq18 + dsq19 + dsq20 + dsq21 + dsq22 + dsq23 + Error(family_id), data=diet_red)
+    # aov_summary <- summary(diet)
+    # aov_table <- as.data.frame(aov_summary[[1]])
+    tidy_aov_df <- tidy(diet)
+    write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_diet_noTGD.csv", sep=""), row.names = TRUE)
     
-    # all_red = table[, c("Diversity", "gender", "age", "ethnicity", "physical_mental_condition", "family_id", "cur_msd_soc", "cur_msd_mat", "HEFI", "antibiotics", 'diet_richness_monthly', 'diet_richness_weekly', 'diet_richness_daily', "strict_diet", "dsq2", "dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq9", "dsq10", "dsq11", "dsq12", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23", "cur_gta", "cur_ior", "cur_gmn_mean", "cur_pm25_mean")]
-    # all_red = table[complete.cases(all_red),]
-    # all = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + cur_msd_soc + cur_msd_mat + cur_gta + cur_ior + cur_gmn_mean + cur_pm25_mean + HEFI + antibiotics + diet_richness_monthly + diet_richness_weekly + diet_richness_daily + strict_diet + dsq2 + dsq4 + dsq5 + dsq6 + dsq7 + dsq8 + dsq9 + dsq10 + dsq11 + dsq12 + dsq13 + dsq14 + dsq15 + dsq16 + dsq17 + dsq18 + dsq19 + dsq20 + dsq21 + dsq22 + dsq23 + Error(family_id), data=all_red)
-    # # aov_summary <- summary(all)
-    # # aov_table <- as.data.frame(aov_summary[[1]])
-    # tidy_aov_df <- tidy(all)
-    # write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_all.csv", sep=""), row.names = TRUE)
+    all_red = table[, c("Diversity", "gender", "age", "ethnicity", "physical_mental_condition", "family_id", "cur_msd_soc", "cur_msd_mat", "HEFI", "antibiotics", 'diet_richness_monthly', 'diet_richness_weekly', 'diet_richness_daily', "strict_diet", "dsq2", "dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq9", "dsq10", "dsq11", "dsq12", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23", "cur_gta", "cur_ior", "cur_gmn_mean", "cur_pm25_mean")]
+    all_red = table[complete.cases(all_red),]
+    all = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + cur_msd_soc + cur_msd_mat + cur_gta + cur_ior + cur_gmn_mean + cur_pm25_mean + HEFI + antibiotics + diet_richness_monthly + diet_richness_weekly + diet_richness_daily + strict_diet + dsq2 + dsq4 + dsq5 + dsq6 + dsq7 + dsq8 + dsq9 + dsq10 + dsq11 + dsq12 + dsq13 + dsq14 + dsq15 + dsq16 + dsq17 + dsq18 + dsq19 + dsq20 + dsq21 + dsq22 + dsq23 + Error(family_id), data=all_red)
+    # aov_summary <- summary(all)
+    # aov_table <- as.data.frame(aov_summary[[1]])
+    tidy_aov_df <- tidy(all)
+    write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_all_noTGD.csv", sep=""), row.names = TRUE)
     
-    # all_no_ab_red = table_no_ab[, c("Diversity", "gender", "age", "ethnicity", "physical_mental_condition", "family_id", "cur_msd_soc", "cur_msd_mat", "HEFI", 'diet_richness_monthly', 'diet_richness_weekly', 'diet_richness_daily', "strict_diet", "dsq2", "dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq9", "dsq10", "dsq11", "dsq12", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23", "cur_gta", "cur_ior", "cur_gmn_mean", "cur_pm25_mean")]
-    # all_no_ab_red = table_no_ab[complete.cases(all_no_ab_red),]
-    # all_no_ab = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + cur_msd_soc + cur_msd_mat + cur_gta + cur_ior + cur_gmn_mean + cur_pm25_mean + HEFI + diet_richness_monthly + diet_richness_weekly + diet_richness_daily + strict_diet + dsq2 + dsq4 + dsq5 + dsq6 + dsq7 + dsq8 + dsq9 + dsq10 + dsq11 + dsq12 + dsq13 + dsq14 + dsq15 + dsq16 + dsq17 + dsq18 + dsq19 + dsq20 + dsq21 + dsq22 + dsq23 + Error(family_id), data=all_no_ab_red)
-    # # aov_summary <- summary(all_no_ab)
-    # # aov_table <- as.data.frame(aov_summary[[1]])
-    # tidy_aov_df <- tidy(all_no_ab)
-    # write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_all_no_antibiotics.csv", sep=""), row.names = TRUE)
+    all_no_ab_red = table_no_ab[, c("Diversity", "gender", "age", "ethnicity", "physical_mental_condition", "family_id", "cur_msd_soc", "cur_msd_mat", "HEFI", 'diet_richness_monthly', 'diet_richness_weekly', 'diet_richness_daily', "strict_diet", "dsq2", "dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq9", "dsq10", "dsq11", "dsq12", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23", "cur_gta", "cur_ior", "cur_gmn_mean", "cur_pm25_mean")]
+    all_no_ab_red = table_no_ab[complete.cases(all_no_ab_red),]
+    all_no_ab = aov(Diversity ~ gender + age + ethnicity + physical_mental_condition + cur_msd_soc + cur_msd_mat + cur_gta + cur_ior + cur_gmn_mean + cur_pm25_mean + HEFI + diet_richness_monthly + diet_richness_weekly + diet_richness_daily + strict_diet + dsq2 + dsq4 + dsq5 + dsq6 + dsq7 + dsq8 + dsq9 + dsq10 + dsq11 + dsq12 + dsq13 + dsq14 + dsq15 + dsq16 + dsq17 + dsq18 + dsq19 + dsq20 + dsq21 + dsq22 + dsq23 + Error(family_id), data=all_no_ab_red)
+    # aov_summary <- summary(all_no_ab)
+    # aov_table <- as.data.frame(aov_summary[[1]])
+    tidy_aov_df <- tidy(all_no_ab)
+    write.csv(tidy_aov_df, file=paste(py$folder, "files/alpha_stats/", metrics[i], "_all_no_antibiotics_noTGD.csv", sep=""), row.names = TRUE)
 
 }
 ```
@@ -1621,6 +1838,37 @@ for i in range(len(metrics)):
 ```
 
 # Diet stats
+
+## Variance inflation factors
+
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_participants_full_diet.csv', index_col=0, header=0)
+variables = ["dsq2", "dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq9", "dsq10", "dsq11", "dsq12", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23"]
+
+md = md.loc[:, variables]
+md = sm.add_constant(md)
+
+correl_data = md[variables]
+corr_matrix_spearman = correl_data.corr(method='spearman')
+corr_matrix_pearson = correl_data.corr(method='pearson')
+corr_matrix_spearman.to_csv(folder+'files/diet_variables_spearman.csv')
+corr_matrix_pearson.to_csv(folder+'files/diet_variables_pearson.csv')
+
+plt.figure(figsize=(20, 16))
+sns.heatmap(corr_matrix_spearman, annot=True, cmap='coolwarm', vmin=-1, vmax=1)
+plt.title('Pairwise Correlation Matrix')
+plt.savefig(folder+'figures/diet_correlation.png', dpi=600, bbox_inches='tight')
+
+X = md.copy(deep=True)
+X = sm.add_constant(X)
+
+# Calculate VIF for each feature
+vif_data = pd.DataFrame()
+vif_data['Feature'] = X.columns
+vif_data['VIF'] = [variance_inflation_factor(X.values, i) for i in range(X.shape[1])]
+
+vif_data.to_csv(folder+'files/diet_variables_vif.csv')
+```
 
 ## ANOVA tests with each diet variable
 
@@ -1671,6 +1919,127 @@ all_vals = all_vals.drop('Residuals', axis=0)
 all_vals.to_csv(folder+'files/alpha_stats/diet_summary.csv')
 ```
 
+## Mediation modeling with ethnicity
+
+```{python}
+md = pd.read_csv(folder+'files/metadata_microbiome_participants_full_diet.csv', index_col=0, header=0)
+variables = ["dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq10", "dsq11", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23"]
+phylo_rpca = pd.read_csv(folder+'files/beta_diversity/phylo_rpca_ordination_pca.csv', index_col=0, header=0)
+pcs = ['PC1', 'PC2']
+
+phylo_rpca = phylo_rpca.loc[md.index.values, :]
+
+cols = ['ethnicity', 'gender', 'age', 'physical_mental_condition']+variables
+for col in cols:
+  phylo_rpca[col] = md[col]
+  
+# phylo_rpca['eth_EA'] = (phylo_rpca['ethnicity'] == 'East Asian').astype(int)
+# phylo_rpca['eth_SA'] = (phylo_rpca['ethnicity'] == 'South Asian').astype(int)
+
+phylo_rpca['eth_EA'] = np.nan
+phylo_rpca['eth_SA'] = np.nan
+phylo_rpca['eth_EA_SA'] = np.nan
+
+for row in phylo_rpca.index.values:
+  if phylo_rpca.loc[row, 'ethnicity'] == 'White':
+    phylo_rpca.loc[row, 'eth_EA'] = 0
+    phylo_rpca.loc[row, 'eth_SA'] = 0
+  elif phylo_rpca.loc[row, 'ethnicity'] == 'East Asian':
+    phylo_rpca.loc[row, 'eth_EA'] = 1
+    phylo_rpca.loc[row, 'eth_EA_SA'] = 0
+  elif phylo_rpca.loc[row, 'ethnicity'] == 'South Asian':
+    phylo_rpca.loc[row, 'eth_SA'] = 1
+    phylo_rpca.loc[row, 'eth_EA_SA'] = 1
+
+phylo_rpca_EA = phylo_rpca.dropna(subset=['eth_EA'])
+phylo_rpca_SA = phylo_rpca.dropna(subset=['eth_SA'])
+phylo_rpca_EA_SA = phylo_rpca.dropna(subset=['eth_EA_SA'])
+
+results_ea = {}
+
+for m in variables:
+    print(m)
+    med_model = ols(f"{m} ~ eth_EA + age + gender + physical_mental_condition", data=phylo_rpca_EA)
+    out_model = ols(f"PC1 ~ eth_EA + {m} + age + gender + physical_mental_condition", data=phylo_rpca_EA)
+    med = Mediation(out_model, med_model,
+                    exposure='eth_EA',
+                    mediator=m)
+    res = med.fit(n_rep=1000)  # bootstrap
+    results_ea[m] = res.summary()
+
+
+for k, v in results_ea.items():
+    print(f"\nMediator: {k}")
+    print(v)
+    v.to_csv(folder+'files/ethnicity_mediation/eth_EA_'+k+'_PC1.csv')
+
+results_sa = {}
+
+for m in variables:
+    print(m)
+    med_model = ols(f"{m} ~ eth_SA + age + gender + physical_mental_condition", data=phylo_rpca_SA)
+    out_model = ols(f"PC1 ~ eth_SA + {m} + age + gender + physical_mental_condition", data=phylo_rpca_SA)
+    med = Mediation(out_model, med_model,
+                    exposure='eth_SA',
+                    mediator=m)
+    res = med.fit(n_rep=1000)  # bootstrap
+    results_sa[m] = res.summary()
+
+
+for k, v in results_sa.items():
+    print(f"\nMediator: {k}")
+    print(v)
+    v.to_csv(folder+'files/ethnicity_mediation/eth_SA_'+k+'_PC1.csv')
+
+results_ea_sa = {}
+
+for m in variables:
+    print(m)
+    med_model = ols(f"{m} ~ eth_EA_SA + age + gender + physical_mental_condition", data=phylo_rpca_EA_SA)
+    out_model = ols(f"PC1 ~ eth_EA_SA + {m} + age + gender + physical_mental_condition", data=phylo_rpca_EA_SA)
+    med = Mediation(out_model, med_model,
+                    exposure='eth_EA_SA',
+                    mediator=m)
+    res = med.fit(n_rep=1000)  # bootstrap
+    results_ea_sa[m] = res.summary()
+
+
+for k, v in results_ea_sa.items():
+    print(f"\nMediator: {k}")
+    print(v)
+    v.to_csv(folder+'files/ethnicity_mediation/eth_EA_SA_'+k+'_PC1.csv')
+
+```
+
+Combine results:
+```{python}
+variables = ["dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq10", "dsq11", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23"]
+
+all_vars = []
+for var in variables:
+  this_var = [var]
+  col_names = ['Diet variable']
+  ea = pd.read_csv(folder+'files/ethnicity_mediation/eth_EA_'+var+'_PC1.csv', index_col=0, header=0)
+  for val in ['ACME (average)', 'ADE (average)', 'Prop. mediated (average)']:
+    for col in ['Estimate', 'Lower CI bound', 'Upper CI bound', 'P-value']:
+      this_var.append(ea.loc[val, col])
+      col_names.append('East Asian '+val+' '+col)
+  sa = pd.read_csv(folder+'files/ethnicity_mediation/eth_SA_'+var+'_PC1.csv', index_col=0, header=0)
+  for val in ['ACME (average)', 'ADE (average)', 'Prop. mediated (average)']:
+    for col in ['Estimate', 'Lower CI bound', 'Upper CI bound', 'P-value']:
+      this_var.append(sa.loc[val, col])
+      col_names.append('South Asian '+val+' '+col)
+  ea_sa = pd.read_csv(folder+'files/ethnicity_mediation/eth_EA_SA_'+var+'_PC1.csv', index_col=0, header=0)
+  for val in ['ACME (average)', 'ADE (average)', 'Prop. mediated (average)']:
+    for col in ['Estimate', 'Lower CI bound', 'Upper CI bound', 'P-value']:
+      this_var.append(ea_sa.loc[val, col])
+      col_names.append('East vs South Asian '+val+' '+col)
+  all_vars.append(this_var)
+
+all_vars_df = pd.DataFrame(all_vars, columns=col_names).set_index('Diet variable')
+all_vars_df.to_csv(folder+'files/ethnicity_mediation/summary.csv')
+```
+
 # Differential abundance
 
 Copied across genus table to vulcan.
@@ -1679,6 +2048,8 @@ Read in data:
 ```{R, eval=FALSE}
 #conda activate r-4.4.1 # - Maaslin3
 #conda activate r-phyloseq # - ALDEx2
+library(maaslin3)
+
 ft = read.csv("files/feature_table_genus.csv", header= TRUE, row.names = 1, stringsAsFactors = FALSE)
 md = read.csv("files/metadata_microbiome_participants.csv", header= TRUE, row.names = 1, stringsAsFactors = FALSE)
 # ft = read.csv(paste(py$folder, "files/feature_table_genus.csv", sep=""), header= TRUE, row.names = 1, stringsAsFactors = FALSE)
@@ -1694,8 +2065,6 @@ md$family_id = as.character(md$family_id)
 
 Run MaAsLin3:
 ```{R}
-library(maaslin3)
-
 md = md[colnames(ft),]
 
 sample_sums = colSums(ft)
@@ -1708,48 +2077,48 @@ set.seed(1)
 
 fit_out <- maaslin3(input_data = ft,
                     input_metadata = md,
-                    output = 'differential_abundance/maaslin3_basic_added',
-                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + read_depth',
-                    strata_effects = 'family_id',
+                    output = 'differential_abundance/maaslin3_basic_added_fidrandom',
+                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + read_depth + (1 | family_id)',
                     normalization = 'TSS',
+                    small_random_effects=TRUE,
                     transform = 'LOG',
                     augment = TRUE,
                     standardize = TRUE,
                     max_significance = 0.1,
                     median_comparison_abundance = TRUE,
                     median_comparison_prevalence = TRUE,
-                    max_pngs = 250,
-                    cores = 12)
+                    max_pngs = 0,
+                    cores = 48)
 
 fit_out <- maaslin3(input_data = ft,
                     input_metadata = md,
-                    output = 'differential_abundance/maaslin3_deprivation_added',
-                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + cur_msd_soc + cur_msd_mat + read_depth',
-                    strata_effects = 'family_id',
+                    output = 'differential_abundance/maaslin3_deprivation_added_fidrandom',
+                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + cur_msd_soc + cur_msd_mat + read_depth + (1 | family_id)',
                     normalization = 'TSS',
+                    small_random_effects=TRUE,
                     transform = 'LOG',
                     augment = TRUE,
                     standardize = TRUE,
                     max_significance = 0.1,
                     median_comparison_abundance = TRUE,
                     median_comparison_prevalence = TRUE,
-                    max_pngs = 250,
-                    cores = 12)
+                    max_pngs = 0,
+                    cores = 48)
 
 fit_out <- maaslin3(input_data = ft,
                     input_metadata = md,
-                    output = 'differential_abundance/maaslin3_diet_added',
-                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + HEFI + antibiotics + diet_richness_monthly + diet_richness_weekly + diet_richness_daily + group(strict_diet) + dsq2 + dsq4 + dsq5 + dsq6 + dsq7 + dsq8 + dsq9 + dsq10 + dsq11 + dsq12 + dsq13 + dsq14 + dsq15 + dsq16 + dsq17 + dsq18 + dsq19 + dsq20 + dsq21 + dsq22 + dsq23 + read_depth',
-                    strata_effects = 'family_id',
+                    output = 'differential_abundance/maaslin3_diet_added_fidrandom',
+                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + HEFI + antibiotics + diet_richness_monthly + diet_richness_weekly + diet_richness_daily + group(strict_diet) + dsq2 + dsq4 + dsq5 + dsq6 + dsq7 + dsq8 + dsq9 + dsq10 + dsq11 + dsq12 + dsq13 + dsq14 + dsq15 + dsq16 + dsq17 + dsq18 + dsq19 + dsq20 + dsq21 + dsq22 + dsq23 + read_depth + (1 | family_id)',
                     normalization = 'TSS',
+                    small_random_effects=TRUE,
                     transform = 'LOG',
                     augment = TRUE,
                     standardize = TRUE,
                     max_significance = 0.1,
                     median_comparison_abundance = TRUE,
                     median_comparison_prevalence = TRUE,
-                    max_pngs = 250,
-                    cores = 12)
+                    max_pngs = 0,
+                    cores = 48)
 
 variables = c('HEFI', 'antibiotics', 'diet_richness_monthly', 'diet_richness_weekly', 'diet_richness_daily', 'cur_msd_soc', 'cur_msd_mat', 'strict_diet', 'dsq2', 'dsq4', 'dsq5', 'dsq6', 'dsq7', 'dsq8', 'dsq9', 'dsq10', 'dsq11', 'dsq12', 'dsq13', 'dsq14', 'dsq15', 'dsq16', 'dsq17', 'dsq18', 'dsq19', 'dsq20', 'dsq21', 'dsq22', 'dsq23')
 
@@ -1768,18 +2137,18 @@ for (v in 1:length(variables)) {
   }
   fit_out <- maaslin3(input_data = ft,
                     input_metadata = md_red,
-                    output = paste('differential_abundance/maaslin3_', variables[v], '_added', sep=""),
-                    formula = paste('~ group(gender) + age + group(ethnicity) + physical_mental_condition + ', group, ' + read_depth', sep=""),
-                    strata_effects = 'family_id',
+                    output = paste('differential_abundance/maaslin3_', variables[v], '_added_fidrandom', sep=""),
+                    formula = paste('~ group(gender) + age + group(ethnicity) + physical_mental_condition + ', group, ' + read_depth + (1 | family_id)', sep=""),
                     normalization = 'TSS',
+                    small_random_effects=TRUE,
                     transform = 'LOG',
                     augment = TRUE,
                     standardize = TRUE,
                     max_significance = 0.1,
                     median_comparison_abundance = TRUE,
                     median_comparison_prevalence = TRUE,
-                    max_pngs = 250,
-                    cores = 12)
+                    max_pngs = 0,
+                    cores = 48)
 }
 
 md = read.csv("files/metadata_microbiome_participants_s2pheno_current_env.csv", header= TRUE, row.names = 1, stringsAsFactors = FALSE)
@@ -1808,17 +2177,17 @@ for (v in 1:length(variables)) {
   }
   fit_out <- maaslin3(input_data = ft,
                     input_metadata = md_red,
-                    output = paste('differential_abundance/maaslin3_', variables[v], '_added', sep=""),
-                    formula = paste('~ group(gender) + age + group(ethnicity) + physical_mental_condition + ', group, ' + read_depth', sep=""),
-                    strata_effects = 'family_id',
+                    output = paste('differential_abundance/maaslin3_', variables[v], '_added_fidrandom', sep=""),
+                    formula = paste('~ group(gender) + age + group(ethnicity) + physical_mental_condition + ', group, ' + read_depth + (1 | family_id)', sep=""),
                     normalization = 'TSS',
+                    small_random_effects=TRUE,
                     transform = 'LOG',
                     augment = TRUE,
                     standardize = TRUE,
                     max_significance = 0.1,
                     median_comparison_abundance = TRUE,
                     median_comparison_prevalence = TRUE,
-                    max_pngs = 250,
+                    max_pngs = 0,
                     cores = 48)
 }
 
@@ -1850,9 +2219,51 @@ for (v in 1:length(variables)) {
   }
   fit_out <- maaslin3(input_data = ft,
                     input_metadata = md_red,
-                    output = paste('differential_abundance/maaslin3_', variables[v], '_added', sep=""),
-                    formula = paste('~ group(gender) + age + group(ethnicity) + physical_mental_condition + ', group, ' + read_depth', sep=""),
-                    strata_effects = 'family_id',
+                    output = paste('differential_abundance/maaslin3_', variables[v], '_added_fidrandom', sep=""),
+                    formula = paste('~ group(gender) + age + group(ethnicity) + physical_mental_condition + ', group, ' + read_depth + (1 | family_id)', sep=""),
+                    normalization = 'TSS',
+                    small_random_effects=TRUE,
+                    transform = 'LOG',
+                    augment = TRUE,
+                    standardize = TRUE,
+                    max_significance = 0.1,
+                    median_comparison_abundance = TRUE,
+                    median_comparison_prevalence = TRUE,
+                    max_pngs = 0,
+                    cores = 48)
+}
+
+```
+
+Single child from family:
+```{R, eval=FALSE}
+#conda activate r-4.4.1
+library(maaslin3)
+
+ft = read.csv("files/feature_table_genus.csv", header= TRUE, row.names = 1, stringsAsFactors = FALSE)
+md = read.csv("files/metadata_microbiome_participants_single_child_from_family.csv", header= TRUE, row.names = 1, stringsAsFactors = FALSE)
+
+md$gender <- factor(md$gender,
+                 levels = c(1, 2, 3),
+                 labels = c("Male", "Female", "Other"))
+md$physical_mental_condition <- relevel(as.factor(md$physical_mental_condition), ref = "no_reported_condition")
+md$ethnicity <- factor(md$ethnicity, levels=c("White", "South Asian", "East Asian"))
+md$family_id = as.character(md$family_id)
+
+ft = ft[,rownames(md)]
+
+sample_sums = colSums(ft)
+md$read_depth = sample_sums
+
+md$antibiotics <- factor(md$antibiotics, levels=c("no", "in_the_last_month"))
+md$strict_diet <- factor(md$strict_diet, levels=c("omnivore", "vegan", "vegetarian"))
+
+set.seed(1)
+
+fit_out <- maaslin3(input_data = ft,
+                    input_metadata = md,
+                    output = 'differential_abundance/maaslin3_basic_added_single_child',
+                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + read_depth',
                     normalization = 'TSS',
                     transform = 'LOG',
                     augment = TRUE,
@@ -1860,10 +2271,168 @@ for (v in 1:length(variables)) {
                     max_significance = 0.1,
                     median_comparison_abundance = TRUE,
                     median_comparison_prevalence = TRUE,
-                    max_pngs = 250,
+                    max_pngs = 0,
                     cores = 48)
+
+fit_out <- maaslin3(input_data = ft,
+                    input_metadata = md,
+                    output = 'differential_abundance/maaslin3_deprivation_added_single_child',
+                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + cur_msd_soc + cur_msd_mat + read_depth',
+                    normalization = 'TSS',
+                    transform = 'LOG',
+                    augment = TRUE,
+                    standardize = TRUE,
+                    max_significance = 0.1,
+                    median_comparison_abundance = TRUE,
+                    median_comparison_prevalence = FALSE,
+                    max_pngs = 1,
+                    cores = 48)
+
+fit_out <- maaslin3(input_data = ft,
+                    input_metadata = md,
+                    output = 'differential_abundance/maaslin3_diet_added_fidrandom',
+                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + HEFI + antibiotics + diet_richness_monthly + diet_richness_weekly + diet_richness_daily + group(strict_diet) + dsq2 + dsq4 + dsq5 + dsq6 + dsq7 + dsq8 + dsq9 + dsq10 + dsq11 + dsq12 + dsq13 + dsq14 + dsq15 + dsq16 + dsq17 + dsq18 + dsq19 + dsq20 + dsq21 + dsq22 + dsq23 + read_depth',
+                    normalization = 'TSS',
+                    transform = 'LOG',
+                    augment = TRUE,
+                    standardize = TRUE,
+                    max_significance = 0.1,
+                    median_comparison_abundance = TRUE,
+                    median_comparison_prevalence = FALSE,
+                    max_pngs = 1,
+                    cores = 48)
+
+variables = c('HEFI', 'antibiotics', 'diet_richness_monthly', 'diet_richness_weekly', 'diet_richness_daily', 'cur_msd_soc', 'cur_msd_mat', 'strict_diet', 'dsq2', 'dsq4', 'dsq5', 'dsq6', 'dsq7', 'dsq8', 'dsq9', 'dsq10', 'dsq11', 'dsq12', 'dsq13', 'dsq14', 'dsq15', 'dsq16', 'dsq17', 'dsq18', 'dsq19', 'dsq20', 'dsq21', 'dsq22', 'dsq23')
+
+#'HEFI', 'antibiotics', 
+#'#need to do reference variable for antibiotics
+#'#Please provide the reference for the variable 'antibiotics' which includes more than 2 levels: , in_the_last_month, no. Alternatively, set the variable as
+                        # a factor beforehand.
+
+for (v in 1:length(variables)) {
+  print(variables[v])
+  md_red = md[!is.na(md[,variables[v]]),]
+  print(length(rownames(md_red)))
+  group = variables[v]
+  if (group == 'strict_diet') {
+    group = 'group(strict_diet)'
+  }
+  fit_out <- maaslin3(input_data = ft,
+                    input_metadata = md_red,
+                    output = paste('differential_abundance/maaslin3_', variables[v], '_added_single_child', sep=""),
+                    formula = paste('~ group(gender) + age + group(ethnicity) + physical_mental_condition + ', group, ' + read_depth', sep=""),
+                    normalization = 'TSS',
+                    transform = 'LOG',
+                    augment = TRUE,
+                    standardize = TRUE,
+                    max_significance = 0.1,
+                    median_comparison_abundance = TRUE,
+                    median_comparison_prevalence = FALSE,
+                    max_pngs = 1,
+                    cores = 32)
 }
 
+```
+
+Only multiple children:
+```{R}
+library(maaslin3)
+
+ft = read.csv("files/feature_table_genus.csv", header= TRUE, row.names = 1, stringsAsFactors = FALSE)
+md = read.csv("files/metadata_microbiome_participants_no_individual_family.csv", header= TRUE, row.names = 1, stringsAsFactors = FALSE)
+
+md$gender <- factor(md$gender,
+                 levels = c(1, 2, 3),
+                 labels = c("Male", "Female", "Other"))
+md$physical_mental_condition <- relevel(as.factor(md$physical_mental_condition), ref = "no_reported_condition")
+md$ethnicity <- factor(md$ethnicity, levels=c("White", "South Asian", "East Asian"))
+md$family_id = as.character(md$family_id)
+
+ft = ft[,rownames(md)]
+
+sample_sums = colSums(ft)
+md$read_depth = sample_sums
+
+md$antibiotics <- factor(md$antibiotics, levels=c("no", "in_the_last_month"))
+md$strict_diet <- factor(md$strict_diet, levels=c("omnivore", "vegan", "vegetarian"))
+
+set.seed(1)
+
+fit_out <- maaslin3(input_data = ft,
+                    input_metadata = md,
+                    output = 'differential_abundance/maaslin3_basic_added_no_individual',
+                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + read_depth + (1 | family_id)',
+                    small_random_effects = TRUE,
+                    normalization = 'TSS',
+                    transform = 'LOG',
+                    augment = TRUE,
+                    standardize = TRUE,
+                    max_significance = 0.1,
+                    median_comparison_abundance = TRUE,
+                    median_comparison_prevalence = FALSE,
+                    max_pngs = 1,
+                    cores = 32)
+
+fit_out <- maaslin3(input_data = ft,
+                    input_metadata = md,
+                    output = 'differential_abundance/maaslin3_deprivation_added_no_individual',
+                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + cur_msd_soc + cur_msd_mat + read_depth + (1 | family_id)',
+                    small_random_effects = TRUE,
+                    normalization = 'TSS',
+                    transform = 'LOG',
+                    augment = TRUE,
+                    standardize = TRUE,
+                    max_significance = 0.1,
+                    median_comparison_abundance = TRUE,
+                    median_comparison_prevalence = FALSE,
+                    max_pngs = 1,
+                    cores = 32)
+
+fit_out <- maaslin3(input_data = ft,
+                    input_metadata = md,
+                    output = 'differential_abundance/maaslin3_diet_added_no_individual',
+                    formula = '~ group(gender) + age + group(ethnicity) + physical_mental_condition + HEFI + antibiotics + diet_richness_monthly + diet_richness_weekly + diet_richness_daily + group(strict_diet) + dsq2 + dsq4 + dsq5 + dsq6 + dsq7 + dsq8 + dsq9 + dsq10 + dsq11 + dsq12 + dsq13 + dsq14 + dsq15 + dsq16 + dsq17 + dsq18 + dsq19 + dsq20 + dsq21 + dsq22 + dsq23 + read_depth + (1 | family_id)',
+                    small_random_effects = TRUE,
+                    normalization = 'TSS',
+                    transform = 'LOG',
+                    augment = TRUE,
+                    standardize = TRUE,
+                    max_significance = 0.1,
+                    median_comparison_abundance = TRUE,
+                    median_comparison_prevalence = FALSE,
+                    max_pngs = 1,
+                    cores = 32)
+
+variables = c('HEFI', 'antibiotics', 'diet_richness_monthly', 'diet_richness_weekly', 'diet_richness_daily', 'cur_msd_soc', 'cur_msd_mat', 'strict_diet', 'dsq2', 'dsq4', 'dsq5', 'dsq6', 'dsq7', 'dsq8', 'dsq9', 'dsq10', 'dsq11', 'dsq12', 'dsq13', 'dsq14', 'dsq15', 'dsq16', 'dsq17', 'dsq18', 'dsq19', 'dsq20', 'dsq21', 'dsq22', 'dsq23')
+
+#'HEFI', 'antibiotics', 
+#'#need to do reference variable for antibiotics
+#'#Please provide the reference for the variable 'antibiotics' which includes more than 2 levels: , in_the_last_month, no. Alternatively, set the variable as
+                        # a factor beforehand.
+
+for (v in 1:length(variables)) {
+  print(variables[v])
+  md_red = md[!is.na(md[,variables[v]]),]
+  print(length(rownames(md_red)))
+  group = variables[v]
+  if (group == 'strict_diet') {
+    group = 'group(strict_diet)'
+  }
+  fit_out <- maaslin3(input_data = ft,
+                    input_metadata = md_red,
+                    output = paste('differential_abundance/maaslin3_', variables[v], '_added_no_individual', sep=""),
+                    formula = paste('~ group(gender) + age + group(ethnicity) + physical_mental_condition + ', group, ' + read_depth + (1 | family_id)', sep=""),
+                    small_random_effects = TRUE,
+                    normalization = 'TSS',
+                    transform = 'LOG',
+                    augment = TRUE,
+                    standardize = TRUE,
+                    max_significance = 0.1,
+                    median_comparison_abundance = TRUE,
+                    median_comparison_prevalence = FALSE,
+                    max_pngs = 1,
+                    cores = 32)
+}
 ```
 
 Combine differential abundance results:
@@ -1972,6 +2541,58 @@ for metric in metrics:
   count += 1
 
 table_da.to_csv(folder+'differential_abundance/'+save_name)
+```
+
+Compare differential abundance results:
+```{python}
+tax = pd.read_csv(folder+'files/taxonomy.csv', index_col=0, header=0)
+rename_tax = {}
+for row in tax.index.values:
+  rename_tax[row] = tax.loc[row, 'Genus']
+
+results_fid = pd.read_csv(folder+'differential_abundance/maaslin3_basic_added/all_results.tsv', index_col=0, header=0, sep='\t')
+results_single = pd.read_csv(folder+'differential_abundance/maaslin3_basic_added_single_child/all_results.tsv', index_col=0, header=0, sep='\t')
+
+ft_genus = pd.read_csv(folder+'files/feature_table_genus.csv', index_col=0, header=0)
+ft_genus = ft_genus.divide(ft_genus.sum(axis=0), axis=1).multiply(100)
+ft_genus['Mean'] = ft_genus.mean(axis=1)
+ft_genus = ft_genus.sort_values(by=['Mean'], ascending=False).head(20)
+
+results_fid = results_fid[results_fid['metadata'].isin(['gender', 'age', 'ethnicity', 'physical_mental_condition'])]
+results_fid = results_fid[results_fid['model'] == 'abundance']
+results_fid = results_fid.loc[ft_genus.index.values, :]
+
+results_single = results_single[results_single['metadata'].isin(['gender', 'age', 'ethnicity', 'physical_mental_condition'])]
+results_single = results_single[results_single['model'] == 'abundance']
+results_single = results_single.loc[ft_genus.index.values, :]
+
+results_fid = results_fid.rename(index=rename_tax)
+results_single = results_single.rename(index=rename_tax)
+
+results_fid = results_fid.reset_index().set_index(['feature', 'metadata'])
+results_single = results_single.reset_index().set_index(['feature', 'metadata'])
+
+results_fid = results_fid.sort_index()
+results_single = results_single.sort_index()
+
+no_match = []
+
+for g in ft_genus.index.values:
+  genus = rename_tax[g]
+  for md in ['gender', 'age', 'ethnicity', 'physical_mental_condition']:
+    fid = list(results_fid.loc[(genus, md), ['coef', 'qval_individual']].values[0])
+    single = list(results_single.loc[(genus, md), ['coef', 'qval_individual']].values[0])
+    if fid[1] <= 0.1:
+      if single[1] > 0.1:
+        no_match.append([genus, md, fid, single])
+    else:
+      if single[1] <= 0.1:
+        no_match.append([genus, md, fid, single])
+
+for match in no_match:
+  print(match)
+
+
 ```
 
 # Overall plot
@@ -3044,16 +3665,66 @@ tx = plt.text(age_95_pc, ((ymax_ax-ymin_ax)*0.9)+ymin_ax, r'P$_{95}$', ha='cente
 plt.savefig(folder+'figures/beta_pcoa_alpha.png', dpi=600, bbox_inches='tight')
 ```
 
-## Alpha diversity repeated rarefaction
+## Alpha diversity repeated rarefaction and rarefaction curves
 
 ```{python}
-fig = plt.figure(figsize=(12,8))
+fig = plt.figure(figsize=(12,12))
 alpha_metrics = ['chao1', 'faith_pd', 'observed_otus', 'shannon', 'simpson_e', 'simpson']
 alpha_metric_name = ['Chao1 richness', "Faith's phylogenetic\ndiversity", "Observed taxa", "Shannon diversity", "Simpson's evenness", "Simpson's index\nof diversity"]
 
-r, c = [0, 0, 0, 1, 1, 1], [0, 1, 2, 0, 1, 2]
+ft = pd.read_csv(folder+'files/feature-table_min2000_with_metadata.csv', index_col=0, header=0)
+
+ax_rare_all, ax_rare_5000 = plt.subplot2grid((3,2),(0,0)), plt.subplot2grid((3,2),(0,1))
+ft_sum = ft.sum(axis=0)
+
+# for all samples
+max_depth = 50000 # max(ft_sum.values)
+steps = np.linspace(100, max_depth, 50, dtype=int)
+iterations = 10 # Number of iterations per depth
+
+samples_below_5000 = ft_sum[ft_sum < 5000]
+
+for sample in ft.columns:
+  rarefied_richness = []
+  counts = ft.loc[:, sample].values
+  for depth in steps:
+      try:
+        depth_richness = []
+        for _ in range(iterations):
+            subsampled = subsample_counts(counts, depth, replace=False)
+            depth_richness.append(observed_features(subsampled))
+        rarefied_richness.append(np.mean(depth_richness))
+      except:
+        continue
+  ra = ax_rare_all.plot(steps[:len(rarefied_richness)], rarefied_richness, alpha=0.1)
+
+# for only samples with <10000 reads
+max_depth = 5000 # max(ft.loc['Sum', :].values)
+steps = np.linspace(100, max_depth, 20, dtype=int)
+iterations = 10 # Number of iterations per depth
+for sample in samples_below_5000.index.values:
+  rarefied_richness = []
+  counts = ft.loc[:, sample].values
+  for depth in steps:
+      try:
+        depth_richness = []
+        for _ in range(iterations):
+            subsampled = subsample_counts(counts, depth, replace=False)
+            depth_richness.append(observed_features(subsampled))
+        rarefied_richness.append(np.mean(depth_richness))
+      except:
+        continue
+  ra = ax_rare_5000.plot(steps[:len(rarefied_richness)], rarefied_richness, alpha=0.1)
+
+ti = ax_rare_all.set_title('Rarefaction curves', fontweight='bold')
+ti = ax_rare_5000.set_title('Rarefaction curves\n(samples with <5000 reads)', fontweight='bold')
+yl = ax_rare_all.set_ylabel('Observed taxa')
+xl = ax_rare_all.set_xlabel('Subsampling depth')
+xl = ax_rare_5000.set_xlabel('Subsampling depth')
+
+r, c = [1, 1, 1, 2, 2, 2], [0, 1, 2, 0, 1, 2]
 for a in range(len(alpha_metrics)):
-  ax = plt.subplot2grid((2,3),(r[a], c[a]))
+  ax = plt.subplot2grid((3,3),(r[a], c[a]))
   plt.sca(ax)
   ti = ax.set_title(alpha_metric_name[a], fontweight='bold')
   alp = pd.read_csv(folder+'files/alpha_diversity/alpha_'+alpha_metrics[a]+'.csv', index_col=0, header=0)
@@ -3062,10 +3733,27 @@ for a in range(len(alpha_metrics)):
   pl = ax.plot(vals, alp['Mean'], 'k-')
   fb = ax.fill_between(vals, alp['Lower'], alp['Upper'], color='r', alpha=0.5)
   if c[a] == 0: yl = ax.set_ylabel('Diversity')
-  if r[a] == 1: xl = ax.set_xlabel('Samples (sorted by mean diversity)')
+  xl = ax.set_xlabel('Samples (sorted by mean diversity)')
   xt = plt.xticks([])
+
+plt.subplots_adjust(hspace=0.4)
+plt.savefig(folder+'figures/alpha_repeated_rarefaction_rarecurve.png', dpi=600, bbox_inches='tight')
+```
+
+Sparsity rate:
+```{python}
+ft = pd.read_csv(folder+'files/feature-table_min2000_with_metadata.csv', index_col=0, header=0)
+ft = ft[ft.max(axis=1) > 0]
+
+all_values = []
+
+for row in ft.index.values:
+  all_values.extend(list(ft.loc[row, :].values))
   
-plt.savefig(folder+'figures/alpha_repeated_rarefaction.png', dpi=600, bbox_inches='tight')
+zero_count = all_values.count(0)
+zero_prop = zero_count/len(all_values)
+zero_perc = zero_prop*100
+zero_perc
 ```
 
 # Family plot
@@ -3366,7 +4054,7 @@ plt.sca(ax3)
 #   elif coef >= 0.177: sibs.append(k_dist)
 #   elif coef >= 0.0884: half_sibs.append(k_dist)
 #   elif coef >= 0.0442: cousins.append(k_dist)
-
+# 
 # relatedness = [twin+sibs, half_sibs+cousins, not_related]
 # names = ['Twins/first\ndegree', 'Second/third\ndegree', 'Not related\n']
 
@@ -3383,16 +4071,19 @@ for a in range(len(relatedness)):
   l = len(relatedness[a])
   names[a] += ' ($n$='+f"{l:,}"+' pairs)'
 
-f_statistic, p_value = stats.f_oneway(twin+sibs, half_sibs+cousins, not_related)
+#f_statistic, p_value = stats.f_oneway(twin+sibs, half_sibs+cousins, not_related)
+h_statistic, p_value = stats.kruskal(twin+sibs, half_sibs+cousins, not_related)
 if p_value < 0.001: p_val = '$p$<0.001'
 else: p_val = '$p$='+str(round(p_value, 3))
-tx = ax3.text(0.98, 0.98, r'ANOVA F='+str(round(f_statistic, 3))+', '+p_val, ha='right', va='top', bbox=dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.8), transform=ax3.transAxes)
+tx = ax3.text(0.98, 0.98, r'Kruskal-Wallis H='+str(round(h_statistic, 3))+', '+p_val, ha='right', va='top', bbox=dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.8), transform=ax3.transAxes)
 
-result = stats.tukey_hsd(twin+sibs, half_sibs+cousins, not_related)
+data = [twin+sibs, half_sibs+cousins, not_related]
+p_values = sp.posthoc_dunn(data, p_adjust='holm')
+#result = stats.tukey_hsd(twin+sibs, half_sibs+cousins, not_related)
 li = plt.plot([0, 0, 2, 2], [ma*1.25, ma*1.3, ma*1.3, ma*1.25], 'k-')
 tx = plt.text(1, ma*1.31, '$p$<0.001', ha='center', va='bottom')
 li = plt.plot([0, 0, 1, 1], [ma*1.4, ma*1.45, ma*1.45, ma*1.4], 'k-')
-tx = plt.text(0.5, ma*1.46, '$p$=0.043', ha='center', va='bottom')
+tx = plt.text(0.5, ma*1.46, '$p$=0.040', ha='center', va='bottom')
 
 xt = plt.xticks(range(len(relatedness)), names, rotation=45)
 yl = plt.ylabel('Phylogenetic-RPCA distance', fontweight='bold')
@@ -3428,10 +4119,11 @@ l1, l2 = len(same_family), len(other_family)
 xt = plt.xticks([0, 1], ['Different family\nunit ($n$='+f"{l2:,}"+')', 'Same family\nunit ($n$='+f"{l1:,}"+')'], rotation=45)
 yl = plt.ylabel('Phylogenetic-RPCA distance', fontweight='bold')
 
-f_statistic, p_value = stats.f_oneway(same_family, other_family)
+#f_statistic, p_value = stats.f_oneway(same_family, other_family)
+h_statistic, p_value = stats.kruskal(same_family, other_family)
 if p_value < 0.001: p_val = '$p$<0.001'
 else: p_val = '$p$='+str(round(p_value, 3))
-tx = ax4.text(0.98, 0.98, r'ANOVA F='+str(round(f_statistic, 3))+', '+p_val, ha='right', va='top', bbox=dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.8), transform=ax4.transAxes)
+tx = ax4.text(0.98, 0.98, r'Kruskal-Wallis H='+str(round(h_statistic, 3))+', '+p_val, ha='right', va='top', bbox=dict(boxstyle='round,pad=0.1', facecolor='white', alpha=0.8), transform=ax4.transAxes)
 
 ti = plt.title("Distances within vs between family units", fontweight='bold')
 ti = plt.title("D", fontweight='bold', loc='left')
@@ -3714,7 +4406,7 @@ plt.subplots_adjust(wspace=0.8, hspace=0.5)
 plt.savefig(folder+'figures/adults_prevalence_ASV_genus_heatmap.png', dpi=600, bbox_inches='tight')
 ```
 
-Adults beta diversity:
+## Adults beta diversity
 ## Calculate beta diversity
 
 Phylogenetic RPCA:
@@ -6247,6 +6939,129 @@ for r in range(len(all_correlations.index.values)):
 plt.savefig(folder+'figures/diet_correlation.png', dpi=600, bbox_inches='tight')
 ```
 
+## Mediation modeling with ethnicity
+
+```{python}
+variables = ["dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq10", "dsq11", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23"]
+
+fig = plt.figure(figsize=(10,8))
+axes = [[plt.subplot(1,4,1), plt.subplot(1,4,2)], [plt.subplot(1,4,3), plt.subplot(1,4,4)]]
+ethnicity = ['EA', 'SA', 'EA_SA']
+
+loc = 18
+for v in range(len(variables)):
+  for e in range(len(ethnicity)):
+    eth = ethnicity[e]
+    df = pd.read_csv(folder+'files/ethnicity_mediation/eth_'+eth+'_'+variables[v]+'_PC1.csv', index_col=0, header=0)
+    mediated = df.loc['ACME (average)', ['Estimate', 'Lower CI bound', 'Upper CI bound', 'P-value']]
+    direct = df.loc['ADE (average)', ['Estimate', 'Lower CI bound', 'Upper CI bound', 'P-value']]
+    proport = df.loc['Prop. mediated (average)', ['Estimate', 'Lower CI bound', 'Upper CI bound', 'P-value']]
+    
+    color1, color2 = 'k', 'k'
+    if mediated[3] <= 0.05: color1 = 'r'
+    if direct[3] <= 0.05: color2 = 'r'
+    eb = axes[e][0].errorbar(mediated[0], loc-v, xerr=mediated[0]-mediated[1], marker='o', color=color1)
+    eb = axes[e][1].errorbar(direct[0], loc-v, xerr=direct[0]-direct[1], marker='o', color=color2)
+
+axes[0][0].set_title('East Asian vs White\nMediated effects', fontweight='bold')
+axes[0][1].set_title('East Asian vs White\nDirect effects', fontweight='bold')
+axes[1][0].set_title('South Asian vs White\nMediated effects', fontweight='bold')
+axes[1][1].set_title('South Asian vs White\nDirect effects', fontweight='bold')
+
+rename_diet_vars = {'strict_diet':'Strict diet', 'diet_richness_weekly':'Diet variety\nscore (weekly)', 'dsq2':'Probiotics/prebiotics/\nsupplements', 'dsq4':'Whole grains', 'dsq5':'Refined grains', 'dsq6':'Dairy milk', 'dsq7':'Dairy yoghurt', 'dsq8':'Dairy cheese', 'dsq9':'Non-dairy milk/\nyoghurt/cheese', 'dsq10':'Soda/sugary drinks', 'dsq11':'Fruit juices', 'dsq12':'Coffee or tea', 'dsq13':'Fruit', 'dsq14':'Vegetables', 'dsq15':'Beans/legumes', 'dsq16':'Red meat', 'dsq17':'Processed meat', 'dsq18':'Poultry', 'dsq19':'Fish/seafood', 'dsq20':'Eggs', 'dsq21':'Tofu/soy', 'dsq22':'Desserts/sweets', 'dsq23':'Salty snacks','HEFI':'HEFI'}
+
+ylocs, ylabs = [], []
+for v in range(len(variables)):
+  ylocs.append(loc-v)
+  ylabs.append(rename_diet_vars[variables[v]])
+
+for a in range(2):
+  for b in range(2):
+    plt.sca(axes[a][b])
+    if a == 0 and b == 0: yt = plt.yticks(ylocs, ylabs)
+    else: yt = plt.yticks(ylocs, [])
+    pl = plt.plot([0, 0], [ylocs[0]+0.5, ylocs[-1]-0.5], 'k--')
+    yl = plt.ylim([ylocs[0]+0.5, ylocs[-1]-0.5])
+    xl = plt.xlabel('Estimate')
+    
+plt.savefig(folder+'figures/diet_ethnicity_direct_mediated_effect_PC1.png', dpi=600, bbox_inches='tight')
+```
+
+Second go:
+```{python}
+variables = ["dsq4", "dsq5", "dsq6", "dsq7", "dsq8", "dsq10", "dsq11", "dsq13", "dsq14", "dsq15", "dsq16", "dsq17", "dsq18", "dsq19", "dsq20", "dsq21", "dsq22", "dsq23"]
+
+fig = plt.figure(figsize=(12,10))
+#axes = [[plt.subplot(1,1,1), plt.subplot(1,4,2)], [plt.subplot(1,4,3), plt.subplot(1,4,4)]]
+ax, ax2 = plt.subplot2grid((1,3),(0,0), colspan=2), plt.subplot2grid((1,3),(0,2))
+ethnicity = ['EA_SA', 'SA', 'EA']
+colors = ['s', '^', 'o']
+minus = [-0.2, 0, 0.2]
+
+loc = 18
+for v in range(len(variables)):
+  for e in range(len(ethnicity)):
+    eth = ethnicity[e]
+    df = pd.read_csv(folder+'files/ethnicity_mediation/eth_'+eth+'_'+variables[v]+'_PC1.csv', index_col=0, header=0)
+    mediated = df.loc['ACME (average)', ['Estimate', 'Lower CI bound', 'Upper CI bound', 'P-value']].values
+    direct = df.loc['ADE (average)', ['Estimate', 'Lower CI bound', 'Upper CI bound', 'P-value']].values
+    proport = df.loc['Prop. mediated (average)', ['Estimate', 'Lower CI bound', 'Upper CI bound', 'P-value']].values
+    # 
+    color1 = 'k'
+    alpha = 1
+    if mediated[3] <= 0.05: color1 = 'r'
+    else: alpha = 0.4
+    eb = ax.errorbar(mediated[0], loc-v-minus[e], xerr=mediated[0]-mediated[1], marker=colors[e], color=color1, markeredgecolor='k', alpha=alpha)
+    color2 = 'k'
+    alpha = 1
+    if proport[3] <= 0.05: color2 = 'r'
+    else: alpha = 0.4
+    eb = ax2.errorbar(proport[0], loc-v-minus[e], xerr=proport[0]-proport[1], marker=colors[e], color=color2, markeredgecolor='k', alpha=alpha)
+
+# axes[0][0].set_title('East Asian vs White\nMediated effects', fontweight='bold')
+# axes[0][1].set_title('East Asian vs White\nDirect effects', fontweight='bold')
+# axes[1][0].set_title('South Asian vs White\nMediated effects', fontweight='bold')
+# axes[1][1].set_title('South Asian vs White\nDirect effects', fontweight='bold')
+
+rename_diet_vars = {'strict_diet':'Strict diet', 'diet_richness_weekly':'Diet variety\nscore (weekly)', 'dsq2':'Probiotics/prebiotics/\nsupplements', 'dsq4':'Whole grains', 'dsq5':'Refined grains', 'dsq6':'Dairy milk', 'dsq7':'Dairy yoghurt', 'dsq8':'Dairy cheese', 'dsq9':'Non-dairy milk/\nyoghurt/cheese', 'dsq10':'Soda/sugary drinks', 'dsq11':'Fruit juices', 'dsq12':'Coffee or tea', 'dsq13':'Fruit', 'dsq14':'Vegetables', 'dsq15':'Beans/legumes', 'dsq16':'Red meat', 'dsq17':'Processed meat', 'dsq18':'Poultry', 'dsq19':'Fish/seafood', 'dsq20':'Eggs', 'dsq21':'Tofu/soy', 'dsq22':'Desserts/sweets', 'dsq23':'Salty snacks','HEFI':'HEFI'}
+
+ylocs, ylabs = [], []
+for v in range(len(variables)):
+  ylocs.append(loc-v)
+  ylabs.append(variables[v].replace('dsq', 'DSQ')+': '+rename_diet_vars[variables[v]])
+
+plt.sca(ax)
+yt = plt.yticks(ylocs, ylabs)
+pl = plt.plot([0, 0], [ylocs[0]+0.5, ylocs[-1]-0.5], 'k--')
+yl = plt.ylim([ylocs[0]+0.5, ylocs[-1]-0.5])
+xl = plt.xlabel('Estimate')
+
+plt.sca(ax2)
+yt = plt.yticks(ylocs, [])
+pl = plt.plot([0, 0], [ylocs[0]+0.5, ylocs[-1]-0.5], 'k--')
+yl = plt.ylim([ylocs[0]+0.5, ylocs[-1]-0.5])
+xl = plt.xlim([-0.5, 0.5])
+xl = plt.xlabel('Proportion mediated')
+
+eth_comp = {'o':'White $vs$ East Asian', '^':'White $vs$ South Asian', 's':'East Asian $vs$ South Asian'}
+pval = {'$p$ ≤ 0.05':'r', '$p$ > 0.05':'k'}
+alp = {'$p$ ≤ 0.05':1, '$p$ > 0.05':0.4}
+
+handles = [Line2D([0], [0], marker=ec, color='w', label=eth_comp[ec], markerfacecolor='k', markersize=12) for ec in eth_comp] +[Line2D([0], [0], marker=ec, color='w', label=pv, markerfacecolor=pval[pv], markersize=12, alpha=alp[pv]) for pv in pval]
+leg = ax2.legend(handles=handles, loc='upper left', bbox_to_anchor=(1.01, 1.0))
+
+# for a in range(2):
+#   for b in range(2):
+#     plt.sca(axes[a][b])
+#     if a == 0 and b == 0: yt = plt.yticks(ylocs, ylabs)
+#     else: yt = plt.yticks(ylocs, [])
+#     pl = plt.plot([0, 0], [ylocs[0]+0.5, ylocs[-1]-0.5], 'k--')
+#     yl = plt.ylim([ylocs[0]+0.5, ylocs[-1]-0.5])
+#     xl = plt.xlabel('Estimate')
+    
+plt.savefig(folder+'figures/diet_ethnicity_direct_mediated_effect_PC1.png', dpi=600, bbox_inches='tight')
+```
+
 ## Differential abundance
 
 ```{python}
@@ -7803,4 +8618,30 @@ for var in variables_all:
 
 plt.savefig(folder+'figures/genotyping_associations.png', bbox_inches='tight', dpi=600)
 plt.close()
+```
+
+# FDR correction
+
+```{python}
+fn = folder+'fdr_correction/anova_in.csv'
+
+pvals, pvals_na = [], []
+for row in open(fn, 'r'):
+  try:
+    pvals.append(float(row.replace('\n', '').replace('\ufeff', '')))
+  except:
+    nothing = True
+  pvals_na.append(row.replace('\n', '').replace('\ufeff', ''))
+  
+rejected, p_adjusted, alpha_sidak, alpha_bonf = multipletests(pvals, alpha=0.05, method='fdr_bh')
+
+c = 0
+with open(fn.replace('_in', '_out'), 'w') as f:
+  for p in range(len(pvals_na)):
+    if pvals_na[p] != 'NA':
+      q = f.write(pvals_na[p]+','+str(p_adjusted[c])+'\n')
+      c += 1
+    else:
+      q = f.write('NA,NA\n')
+
 ```
